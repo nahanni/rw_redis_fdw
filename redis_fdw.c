@@ -3505,6 +3505,7 @@ redisExecForeignInsert(EState *estate,
 	redisReply *expreply = NULL;
 	char vbuf[32];
 
+	bool newkey = false;
 	char *str = NULL;
 	char *val = NULL;
 	char *retval = NULL;
@@ -3543,6 +3544,7 @@ redisExecForeignInsert(EState *estate,
 				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
 				            (ERROR, "key must not be NULL"));
 			rctx->key = param->value;
+			newkey = true;
 			break;
 		case VAR_FIELD:
 			if (isnull)
@@ -3593,11 +3595,15 @@ redisExecForeignInsert(EState *estate,
 			break;
 		}
 
-		DEBUG((DEBUG_LEVEL, "parameter %s value %s",
+		DEBUG((DEBUG_LEVEL, "insert parameter %s value %s",
 		    FIELD_NAMES[param->var_field], param->value));
 	}
 
-	if (rctx->pfxkey == NULL) {
+	if (rctx->pfxkey == NULL || newkey) {
+		if (newkey && rctx->pfxkey != NULL) {
+			pfree(rctx->pfxkey);
+		}
+
 		if (rctx->keyprefix != NULL) {
 			rctx->pfxkey = (char *)palloc(strlen(rctx->keyprefix) +
 			                              strlen(rctx->key) + 1);
@@ -3626,7 +3632,7 @@ redisExecForeignInsert(EState *estate,
 			rctx->expiry = 0;
 		} else {
 			if (val) {
-				DEBUG((DEBUG_LEVEL, "SET %s %s ", rctx->pfxkey, val));
+				DEBUG((DEBUG_LEVEL, "SET %s %s", rctx->pfxkey, val));
 				reply = redisCommand(rctx->r_ctx, "SET %s %s",
 				    rctx->pfxkey, val);
 			} else {
@@ -3990,7 +3996,7 @@ redisExecForeignUpdate(EState *estate,
 			break;
 		}
 
-		DEBUG((DEBUG_LEVEL, "parameter %s value %s",
+		DEBUG((DEBUG_LEVEL, "update parameter %s value %s",
 		    FIELD_NAMES[param->var_field], param->value));
 	}
 
