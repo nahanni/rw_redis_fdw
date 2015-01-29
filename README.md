@@ -1,6 +1,6 @@
-# Writeable Foreign Data Wrapper for Redis
+# Writable Foreign Data Wrapper for Redis
 
-This PostgreSQL extention provides a Foreign Data Wrapper for read (SELECT) and write (INSERT, UPDATE, DELETE) access to Redis databases (http://redis.io).
+This PostgreSQL extension provides a Foreign Data Wrapper for read (SELECT) and write (INSERT, UPDATE, DELETE) access to Redis databases (http://redis.io).
 
 *Note* that this repository is called rw\_redis\_fdw as to not be confused with https://github.com/pg-redis-fdw/redis_fdw, which was used as a template for the table schema. Instructions hereon-in is in reference this repository's project only.
 
@@ -50,7 +50,7 @@ Server options are optional if using the defaults.
 
 ## PostgreSQL Table Schema
 
-redis\_fdw expects the tables to be structured in a manner which helps it issue Redis commands and translate data. The default column names are listed below, however they can be renamed if desired in which case the column option `param <redis_fdw_original>` must be provided to map to the original names.
+redis\_fdw expects the tables to be structured in a manner which helps it issue Redis commands and translate data. The default column names are listed below, however they can be relabeled if desired in which case the column option `param <redis_fdw_original>` must be provided to map to the original redis\_fdw name.
 
 ```
   CREATE FOREIGN TABLE rft_str (
@@ -74,10 +74,10 @@ Any extraneous columns defined are ignored and untested.
 ```
 
 - **tabletype** string, hash, mhash, set, zset, list, ttl, len
-- **key**
-- **keyprefix**
-- **readonly**
-- **database**
+- **key** if you want the table to be bound to a specific key. The "key" column must not be declared in the table if this option is used.
+- **keyprefix** to prefix all keys in the table, to assist with namespace separation from other keys in Redis
+- **readonly** no writes permitted
+- **database** for Redis database to use (an integer)
 
 For all tables, tabletype is mandatory as it defines what the Redis data for that table will be. It can be one of the following (refer to the subsections further below for operations that can be completed on them).
 - **string** - key-value pair
@@ -157,7 +157,7 @@ Each row represents a field and value of the hash, so the **key** and **expiry**
 ```
 
 - INSERT is the equivalent of RPUSH (add to the tail of the list)
-- UPDATE uses LSET to chnage the value of an item at the **index**
+- UPDATE uses LSET to change the value of an item at the **index**
 - DELETE of `index = 0` uses LPOP (remove first item), otherwise redis\_fdw will rename the item at the specified index to a searchable string and delete that item.
 
 ### Set
@@ -192,6 +192,8 @@ Each row represents a field and value of the hash, so the **key** and **expiry**
 
 **Read-Write**
 
+Get or set the time to live (in seconds) of a key. If expiry is 0, then the key is made persistent. DELETE will delete the entire key.
+
 ```
   CREATE FOREIGN TABLE rft_ttl(
       key    TEXT,
@@ -203,6 +205,8 @@ Each row represents a field and value of the hash, so the **key** and **expiry**
 ### Len
 
 **Read-only**
+
+Retrieve the length of a key or the database.
 
 ```
   CREATE FOREIGN TABLE rft_len(
@@ -255,6 +259,10 @@ The workaround is something like where `r.key = (<subquery>)`:
   FROM rft_sessions r, u
   WHERE r.key = (SELECT u.key FROM u);
 ```
+
+### PubSub
+
+PUB will be implemented shortly, although SUB won't be available from this module. SUB clients will need to connect to Redis directly.
 
 ## License:
 
