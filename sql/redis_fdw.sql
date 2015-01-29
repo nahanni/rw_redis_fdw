@@ -136,6 +136,7 @@ INSERT INTO rft_set (key, member) VALUES ('skey', 'member4') RETURNING *;
 SELECT * from rft_set WHERE key = 'skey' ORDER BY member;
 
 -- LIST
+INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx0', 0);
 INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx1', 1);
 INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx2', 2);
 INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx3', 3);
@@ -186,6 +187,14 @@ SELECT * FROM rft_mhash WHERE key = 'hkey';
 DELETE FROM rft_hash WHERE key = 'hkey';
 SELECT * FROM rft_hash WHERE key = 'hkey';
 
+-- delete list item at index
+DELETE FROM rft_list WHERE key = 'lkey' AND index = 2;
+SELECT * FROM rft_list WHERE key = 'lkey';
+
+-- delete first list item
+DELETE FROM rft_list WHERE key = 'lkey' AND index = 0;
+SELECT * FROM rft_list WHERE key = 'lkey';
+
 DELETE FROM rft_set WHERE key = 'skey' AND member = 'member2';
 SELECT * FROM rft_set WHERE key = 'skey' ORDER BY member;
 
@@ -204,6 +213,7 @@ DELETE FROM rft_hash WHERE key = 'hkey';
 DELETE FROM rft_hash WHERE key = 'hkey2';
 
 DELETE FROM rft_list WHERE key = 'lkey';
+SELECT * FROM rft_list WHERE key = 'lkey';
 
 DELETE FROM rft_zset WHERE key = 'zkey';
 SELECT * FROM rft_zset WHERE key = 'zkey';

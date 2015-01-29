@@ -55,9 +55,11 @@ redis\_fdw expects the tables to be structured in a manner which helps it issue 
 ```
   CREATE FOREIGN TABLE rft_str (
      key  TEXT,
-     v    TEXT OPTION param 'value',
+     v    TEXT,
      ...
   )...
+
+  ALTER FOREIGN TABLE rft_str ALTER COLUMN v OPTIONS (ADD param 'value');
 ```
 
 Any extraneous columns defined are ignored and untested.
@@ -111,6 +113,8 @@ Note that **expiry** (in seconds) is an optional column in all the tables. If it
 
 **Read-Write**
 
+Each row represents a field and value of the hash, so the **key** and **expiry** columns will be the same for all rows.
+
 ```
   CREATE FOREIGN TABLE rft_hash(
       key    TEXT,
@@ -124,6 +128,7 @@ Note that **expiry** (in seconds) is an optional column in all the tables. If it
 ### Multiple hash fields
 
 **Read-only**
+- *this might be changed to writable in the future, but for now it only supports SELECT queries*
 
 ```
   CREATE FOREIGN TABLE rft_mhash(
@@ -139,6 +144,8 @@ Note that **expiry** (in seconds) is an optional column in all the tables. If it
 
 **Read-Write**
 
+- *currently only supports deletion of item at a particular index. Deletion of a value will be added in the future*
+
 ```
   CREATE FOREIGN TABLE rft_list(
       key    TEXT,
@@ -148,6 +155,10 @@ Note that **expiry** (in seconds) is an optional column in all the tables. If it
   ) SERVER xxx
     OPTIONS (tabletype 'list');
 ```
+
+- INSERT is the equivalent of RPUSH (add to the tail of the list)
+- UPDATE uses LSET to chnage the value of an item at the **index**
+- DELETE of `index = 0` uses LPOP (remove first item), otherwise redis\_fdw will rename the item at the specified index to a searchable string and delete that item.
 
 ### Set
 
@@ -220,6 +231,30 @@ redis\_fdw is able to parse simple WHERE clauses containing the following operat
  -   e.g. `WHERE field @> '{"a","b","c"}'`
 
 Refer to the test sql script for real examples.
+
+## Limitations
+
+redis\_fdw can handle most queries ok if the WHERE clause conditions are passed to it from PostgreSQL.
+
+The module can't yet handle JOINs if the **key** is not provided in WHERE clause as a constant or parameter. The reasons are complex and have to do with PostgreSQL's query planner which doesn't (and may not be able to) provide the WHERE conditions to redis\_fdw.
+
+For example, the following will fail because `r.key = u.key` isn't provided to redis\_fdw.
+
+```
+  SELECT u.*, r.value, r.expiry
+  FROM pgsql_users u
+  JOIN rft_sessions r ON r.key = u.key
+  WHERE r.key = u.key;
+```
+
+The workaround is something like where `r.key = (<subquery>)`:
+
+```
+  WITH u AS (SELECT * FROM pgsql_users WHERE userid = 1)
+  SELECT u.*, r.value, r.expiry
+  FROM rft_sessions r, u
+  WHERE r.key = (SELECT u.key FROM u);
+```
 
 ## License:
 

@@ -214,6 +214,9 @@ static struct redis_fdw_option valid_options[] =
 
 	{OPT_READONLY, ForeignTableRelationId},
 
+	/* Columns */
+	{OPT_PARAM, AttributeRelationId},
+
 	/* Sentinel */
 	{NULL, InvalidOid}
 };
@@ -226,7 +229,7 @@ enum redis_data_type {
 	PG_REDIS_STRING,  /* SET, GET */
 	PG_REDIS_HSET,    /* HSET, HGET */
 	PG_REDIS_HMSET,   /* HMSET, HMGET */
-	PG_REDIS_LIST,    /* LSET, LINDEX, LRANGE, LPUSH, LPOP */
+	PG_REDIS_LIST,    /* LSET, LINDEX, LRANGE, RPUSH, LPOP */
 	PG_REDIS_SET,     /* SADD, SMEMBERS, SREM */
 	PG_REDIS_ZSET,    /* XADD, ZREVRANGE, ZREM */
 	PG_REDIS_LEN,     /* STRLEN, LLEN, HLEN, SCARD, ZCARD, DBSIZE */
@@ -337,9 +340,11 @@ enum redis_cmd {
 	REDIS_PERSIST,
 	REDIS_SET,
 	REDIS_HSET,
-	REDIS_LPUSH,
+	REDIS_RPUSH,
 	REDIS_SADD,
 	REDIS_ZADD,
+
+	REDIS_DISCARD_RESULT,   /* discard the result obtained from redis */
 };
 
 struct redis_column {
@@ -485,6 +490,9 @@ dump_reply(redisReply *r, int level)
 	char prefix[64];
 	int i;
 	redisReply *elem;
+
+	if (r == NULL)
+		return;
 
 	for (i = 0; i < level && i < 63; i++) {
 		prefix[i] = ' ';
@@ -2560,9 +2568,11 @@ redisIterateForeignScan(ForeignScanState *node)
 					    (ERROR, "NULL reply from redis"));
 
 				n = rctx->r_reply->integer;
-				rctx->cmd = REDIS_LLEN;
-				if (n > 0) {
-					freeReplyObject(rctx->r_reply);
+				if (n <= 0) {
+					rctx->cmd = REDIS_DISCARD_RESULT;
+					rctx->rowcount = 0;
+					rctx->rowsdone = 1;
+				} else {
 					DEBUG((DEBUG_LEVEL, "LRANGE %s %d %ld",
 					      rctx->pfxkey, 0, n));
 					rctx->r_reply = redisCommand(ctx, "LRANGE %s %d %lld",
@@ -2736,7 +2746,7 @@ redisIterateForeignScan(ForeignScanState *node)
 	old_ctx = MemoryContextSwitchTo(rctx->temp_ctx);
 	ExecClearTuple(slot);
 
-	if (rctx->rowcount <= 0) {
+	if (rctx->rowcount <= 0 || rctx->cmd == REDIS_DISCARD_RESULT) {
 		if (rctx->r_reply != NULL) {
 			freeReplyObject(rctx->r_reply);
 			rctx->r_reply = NULL;
@@ -3656,15 +3666,15 @@ redisExecForeignInsert(EState *estate,
 		}
 		break;
 	case PG_REDIS_LIST:
-		rctx->cmd = REDIS_LPUSH;
+		rctx->cmd = REDIS_RPUSH;
 
 		/* INSERT (key, value, <unused>index) */
 		if (val) {
-			DEBUG((DEBUG_LEVEL, "LPUSH %s %s", rctx->pfxkey, val));
-			reply = redisCommand(rctx->r_ctx, "LPUSH %s %s", rctx->pfxkey, val);
+			DEBUG((DEBUG_LEVEL, "RPUSH %s %s", rctx->pfxkey, val));
+			reply = redisCommand(rctx->r_ctx, "RPUSH %s %s", rctx->pfxkey, val);
 		} else {
-			DEBUG((DEBUG_LEVEL, "LPUSH %s %ld", rctx->pfxkey, ival));
-			reply = redisCommand(rctx->r_ctx, "LPUSH %s %lld",
+			DEBUG((DEBUG_LEVEL, "RPUSH %s %ld", rctx->pfxkey, ival));
+			reply = redisCommand(rctx->r_ctx, "RPUSH %s %lld",
 			                     rctx->pfxkey, ival);
 		}
 		break;
@@ -4381,18 +4391,21 @@ redisExecForeignDelete(EState *estate,
 		/*
 		 * DELETE WHERE key = x AND index = x
 		 */
-
-#define REDIS_LIST_DEL_MAGIC ":::redis-fdw-marked-for-deletion:::"
-
-		if ((rctx->where_flags & PARAM_VALUE) == 0) {
+		if ((rctx->where_flags & PARAM_INDEX) == 0) {
 			/* delete key */
 			DEBUG((DEBUG_LEVEL, "DEL %s", rctx->pfxkey));
 			reply = redisCommand(rctx->r_ctx, "DEL %s", rctx->pfxkey);
-		} else {
-			if ((resjunk.hasval & PARAM_INDEX) == 0) {
-				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
-				            (ERROR, "index not provided in WHERE"));
+		} else if (resjunk.index == 0) {
+			/* pop out first item to remove */
+			DEBUG((DEBUG_LEVEL, "LPOP %s", rctx->pfxkey));
+			reply = redisCommand(rctx->r_ctx, "LPOP %s", rctx->pfxkey);
+			if (reply->type == REDIS_REPLY_ERROR) {
+				ERR_CLEANUP(reply, rctx->r_ctx,
+				    (ERROR, "redis replied error on LPOP: %s", reply->str));
 			}
+		} else {
+
+#define REDIS_LIST_DEL_MAGIC ":::redis-fdw-marked-for-deletion:::"
 
 			/* rename the index into something unique */
 			reply = redisCommand(rctx->r_ctx, "LSET %s %lld %s",
