@@ -83,6 +83,14 @@ CREATE FOREIGN TABLE rft_len(
 ) SERVER localredis
   OPTIONS (tabletype 'len', database '1');
 
+-- PUBLISH
+CREATE FOREIGN TABLE rft_pub(
+	channel   TEXT,
+	message   TEXT,
+	len       INT
+) SERVER localredis
+  OPTIONS (tabletype 'publish', database '1');
+
 
 -- ===================================================================
 -- simple insert
@@ -171,6 +179,17 @@ SELECT * FROM rft_ttl WHERE key = 'rftz_zkey';
 SELECT * FROM rft_len WHERE key = 'rftz_zkey' AND tabletype = 'zset';
 SELECT * FROM rft_len WHERE key = '*';
 
+-- PUBLISH
+-- only SELECT and INSERT permitted
+INSERT INTO rft_pub VALUES('chan', 'message') RETURNING *;
+SELECT * FROM rft_pub WHERE channel = 'chan';
+
+-- update will fail as it is not supported for "publish"
+UPDATE rft_pub SET message = 'something' WHERE channel = 'chan';
+
+-- delete will fail as it is not supported for "publish"
+DELETE FROM rft_pub WHERE channel = 'chan';
+
 -- ===================================================================
 -- delete
 -- ===================================================================
@@ -226,3 +245,4 @@ DROP FOREIGN TABLE rft_set;
 DROP FOREIGN TABLE rft_zset;
 DROP FOREIGN TABLE rft_ttl;
 DROP FOREIGN TABLE rft_len;
+DROP FOREIGN TABLE rft_pub;

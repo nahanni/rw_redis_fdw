@@ -193,6 +193,7 @@ struct redis_fdw_option {
 #define OPT_PASSWORD  "password"
 #define OPT_DATABASE  "database"
 #define OPT_KEY       "key"
+#define OPT_CHANNEL   "channel"
 #define OPT_KEYPREFIX "keyprefix"
 #define OPT_TABLETYPE "tabletype"
 #define OPT_PARAM     "param"
@@ -209,6 +210,7 @@ static struct redis_fdw_option valid_options[] =
 
 	/* Table options */
 	{OPT_KEY, ForeignTableRelationId},
+	{OPT_CHANNEL, ForeignTableRelationId},
 	{OPT_KEYPREFIX, ForeignTableRelationId},
 	{OPT_TABLETYPE, ForeignTableRelationId},
 
@@ -234,6 +236,7 @@ enum redis_data_type {
 	PG_REDIS_ZSET,    /* XADD, ZREVRANGE, ZREM */
 	PG_REDIS_LEN,     /* STRLEN, LLEN, HLEN, SCARD, ZCARD, DBSIZE */
 	PG_REDIS_TTL,     /* (select) TTL and (update) EXPIRE/PERSIST */
+	PG_REDIS_PUBLISH, /* PUBLISH */
 
 	PG_REDIS_INVALID,
 };
@@ -250,6 +253,8 @@ enum redis_data_type {
 #define PARAM_EXPIRY       0x0080
 #define PARAM_VALUE        0x0100
 #define PARAM_TABLE_TYPE   0x0200
+#define PARAM_CHANNEL      0x0400
+#define PARAM_MESSAGE      0x0800
 
 /*
  * column names/ids that this module accepts
@@ -271,6 +276,8 @@ enum var_field {
 	VAR_ZCARD,
 	VAR_LEN,
 	VAR_TABLE_TYPE,
+	VAR_CHANNEL,
+	VAR_MESSAGE,
 };
 
 static const char *FIELD_NAMES[] = {
@@ -289,7 +296,11 @@ static const char *FIELD_NAMES[] = {
 	[VAR_SCARD]        = "scard",
 	[VAR_ZCARD]        = "zcard",
 	[VAR_LEN]          = "len",
-	[VAR_TABLE_TYPE]   = "tabletype"
+	[VAR_TABLE_TYPE]   = "tabletype",
+
+	/* publish */
+	[VAR_CHANNEL]      = "channel",
+	[VAR_MESSAGE]      = "message"
 };
 
 /* supported column types */
@@ -344,6 +355,9 @@ enum redis_cmd {
 	REDIS_SADD,
 	REDIS_ZADD,
 
+	REDIS_PUBLISH,
+	REDIS_PSNUMSUB,         /* PUBSUB NUMSUB */
+
 	REDIS_DISCARD_RESULT,   /* discard the result obtained from redis */
 };
 
@@ -365,10 +379,10 @@ struct redis_table {
 	struct redis_column *columns;
 
 	/* indices into which column has the attribute */
-	int key;
+	int key;             /* also PUBLISH.channel */
 	int field;
 	int array_field;     /* [] text */
-	int s_value;         /* string value */
+	int s_value;         /* string value / publish.message */
 	int sarray_value;    /* [] text */
 	int i_value;         /* int64 value */
 	int member;
@@ -438,11 +452,6 @@ struct redis_fdw_ctx {
 	bool *pushdown_conds;         /* conditions that can be pushed to redis */
 	struct redis_param_desc *params; /* list of parameters needed for query */
 
-	/*
-	 * For SELECT, param_flags = WHERE clause.
-	 * For INSERT, UPDATE, param_flags = VALUES and SET parameters.
-	 * For UPDATE, DELETE, where_flags = WHERE clause.
-	 */
 	int param_flags;              /* fields provided as params */
 	int where_flags;              /* fields provided in WHERE */
 
@@ -1149,12 +1158,13 @@ redis_fdw_validator(PG_FUNCTION_ARGS)
 				        ));
 
 			database = atoi(defGetString(def));
-		} else if (strcmp(def->defname, OPT_KEY) == 0) {
+		} else if (strcmp(def->defname, OPT_KEY) == 0 ||
+		           strcmp(def->defname, OPT_CHANNEL) == 0) {
 			if (key)
 				ereport(ERROR,
 				        (errcode(ERRCODE_SYNTAX_ERROR),
 				         errmsg("conflicting options: %s (%s)",
-				             OPT_KEY, defGetString(def))
+				             def->defname, defGetString(def))
 			            ));
 			key = defGetString(def);
 		} else if (strcmp(def->defname, OPT_KEYPREFIX) == 0) {
@@ -1183,6 +1193,8 @@ redis_fdw_validator(PG_FUNCTION_ARGS)
 				tabletype = PG_REDIS_HMSET;
 			else if (strcmp(typeval, "list") == 0)
 				tabletype = PG_REDIS_LIST;
+			else if (strcmp(typeval,"publish") == 0)
+				tabletype = PG_REDIS_PUBLISH;
 			else if (strcmp(typeval,"set") == 0)
 				tabletype = PG_REDIS_SET;
 			else if (strcmp(typeval,"len") == 0)
@@ -1364,6 +1376,22 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 				rtable->columns[i].var_field = VAR_MEMBER;
 				optvalid = true;
 			}
+		} else if (strcmp(colname, "channel") == 0) {
+			if (rctx->table_type == PG_REDIS_PUBLISH) {
+				verify_pgtable_coltype(R_TEXT, att_tuple->atttypid,
+				                       colname, tablename);
+				rtable->key = i+1;
+				rtable->columns[i].var_field = VAR_CHANNEL;
+				optvalid = true;
+			}
+		} else if (strcmp(colname, "message") == 0) {
+			if (rctx->table_type == PG_REDIS_PUBLISH) {
+				verify_pgtable_coltype(R_TEXT, att_tuple->atttypid,
+				                       colname, tablename);
+				rtable->s_value = i+1;
+				rtable->columns[i].var_field = VAR_MESSAGE;
+				optvalid = true;
+			}
 		} else if (strcmp(colname, "expiry") == 0) {
 			verify_pgtable_coltype(R_INT, att_tuple->atttypid,
 			                       colname, tablename);
@@ -1388,7 +1416,8 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 				optvalid = true;
 			}
 		} else if (strcmp(colname, "len") == 0) {
-			if (rctx->table_type == PG_REDIS_LEN) {
+			if (rctx->table_type == PG_REDIS_LEN ||
+			    rctx->table_type == PG_REDIS_PUBLISH) {
 				verify_pgtable_coltype(R_INT, att_tuple->atttypid,
 				                       colname, tablename);
 				rtable->len = i+1;
@@ -1503,6 +1532,14 @@ validate_redis_opts(struct redis_fdw_ctx *rctx)
 		 */
 		if (tbl->expiry <= 0)
 			EDYNPARAM(("TTL: expiry column required"));
+		break;
+	case PG_REDIS_PUBLISH:
+		/*
+		 * TABLE (channel TEXT, message TEXT, len int)
+		 *   len = number of subscribers to channel
+		 */
+		if (tbl->s_value <= 0)
+			EDYNPARAM(("PUBLISH: message column required"));
 		break;
 	default:
 		// shouldn't get here
@@ -1731,7 +1768,7 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 
 			switch (leftidx) {
 			case VAR_KEY:
-				rctx->where_flags |= PARAM_KEY;
+				rctx->where_flags |= PARAM_KEY | PARAM_CHANNEL;
 				break;
 			case VAR_FIELD:
 				rctx->where_flags |= PARAM_FIELD;
@@ -1800,6 +1837,7 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 
 				switch (leftidx) {
 				case VAR_KEY:
+				case VAR_CHANNEL:
 					rctx->key = arg;
 					break;
 				case VAR_FIELD:
@@ -1893,6 +1931,8 @@ redis_str_to_tabletype(const char *v) {
 		return PG_REDIS_LEN;
 	else if (strcmp(v, "ttl") == 0)
 		return PG_REDIS_TTL;
+	else if (strcmp(v, "publish") == 0)
+		return PG_REDIS_PUBLISH;
 
 	return PG_REDIS_INVALID;
 }
@@ -1923,8 +1963,14 @@ redis_get_table_options(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 		char *v;
 	
 		redis_opt_string(def, OPT_KEY, &rctx->key);
-		if (rctx->key != NULL)
+		if (rctx->key != NULL) {
 			rctx->where_flags |= PARAM_KEY;
+		} else {
+			/* try "channel" instead for publish */
+			redis_opt_string(def, OPT_CHANNEL, &rctx->key);
+			if (rctx->key != NULL)
+				rctx->where_flags |= PARAM_KEY;
+		}
 
 		redis_opt_string(def, OPT_HOST, &rctx->host);
 		redis_opt_string(def, "address", &rctx->host);
@@ -2097,6 +2143,7 @@ redisGetForeignRelSize(PlannerInfo *root,
 	case PG_REDIS_HMSET:
 	case PG_REDIS_LEN:
 	case PG_REDIS_TTL:
+	case PG_REDIS_PUBLISH:
 		baserel->rows = 1;
 		break;
 	default:
@@ -2129,7 +2176,8 @@ redisGetForeignRelSize(PlannerInfo *root,
 	if ((rctx->where_flags & PARAM_KEY) == 0)
 		ereport(ERROR,
 		   (errcode(ERRCODE_FDW_DYNAMIC_PARAMETER_VALUE_NEEDED),
-		    errmsg("\"key\" missing in table option and WHERE clause")));
+		    errmsg("\"%s\" missing in table option and WHERE clause",
+		    rctx->table_type == PG_REDIS_PUBLISH ? "channel" : "key")));
 
 	redisFree(ctx);
 	baserel->fdw_private = (void *) rctx;
@@ -2394,7 +2442,8 @@ redisIterateForeignScan(ForeignScanState *node)
 
 				switch (param->var_field) {
 				case VAR_KEY:
-					rctx->where_flags |= PARAM_KEY;
+				case VAR_CHANNEL:
+					rctx->where_flags |= PARAM_KEY | PARAM_CHANNEL;
 					rctx->key = param->value;
 					break;
 				case VAR_FIELD:
@@ -2405,12 +2454,16 @@ redisIterateForeignScan(ForeignScanState *node)
 					rctx->where_flags |= PARAM_MEMBER;
 					rctx->where_conds.s_value = param->value;
 					break;
+				case VAR_MESSAGE:
+					rctx->where_flags |= PARAM_MESSAGE;
+					rctx->where_conds.s_value = param->value;
+					break;
 				case VAR_ARRAY_FIELD:
 					rctx->where_flags |= PARAM_ARRAY_FIELD;
 					rctx->where_conds.field = param->value;
 					break;
 				case VAR_MEMBERS:
-					rctx->where_flags |= PARAM_ARRAY_FIELD;
+					rctx->where_flags |= PARAM_MEMBERS;
 					rctx->where_conds.s_value = param->value;
 					break;
 				case VAR_EXPIRY:
@@ -2707,6 +2760,12 @@ redisIterateForeignScan(ForeignScanState *node)
 			rctx->r_reply = redisCommand(ctx, "TTL %s", rctx->pfxkey);
 			rctx->cmd = REDIS_TTL;
 			break;
+		case PG_REDIS_PUBLISH:
+			DEBUG((DEBUG_LEVEL, "PUBSUB NUMSUB %s", rctx->pfxkey));
+			rctx->r_reply = redisCommand(ctx, "PUBSUB NUMSUB %s", rctx->pfxkey);
+			rctx->cmd = REDIS_PSNUMSUB;
+			break;
+
 		default:
 			break;
 		}
@@ -2859,6 +2918,17 @@ redisIterateForeignScan(ForeignScanState *node)
 			rctx->rowsdone++;
 		}
 		break;
+
+	case REDIS_PSNUMSUB:
+		Assert(rctx->r_reply->elements > 1);
+		Assert(rctx->r_reply->element != NULL);
+
+		/* first array item is channel, second is #subscribed */
+		i_value = rctx->r_reply->element[1]->integer;
+		rctx->rowsdone = 1;
+		rctx->rowcount = 0;
+		break;
+
 	default:
 		break;
 	}
@@ -2889,6 +2959,7 @@ fill_slot:
 
 		switch (rctx->rtable.columns[i].var_field) {
 		case VAR_KEY:
+		case VAR_CHANNEL:
 			value = rctx->key;
 			break;
 		case VAR_FIELD:
@@ -2898,6 +2969,7 @@ fill_slot:
 			value = rctx->where_conds.field;
 			break;
 		case VAR_S_VALUE:
+		case VAR_MESSAGE:
 			value = s_value;
 			break;
 		case VAR_SARRAY_VALUE:
@@ -3065,6 +3137,11 @@ redisAddForeignUpdateTargets(Query *parsetree,
 	if (table_type == PG_REDIS_INVALID)
 		ereport(ERROR,
 		        (errcode(ERRCODE_FDW_ERROR), errmsg("table type not found")));
+
+	if (table_type == PG_REDIS_PUBLISH)
+		ereport(ERROR,
+		        (errcode(ERRCODE_FDW_ERROR),
+		        errmsg("only INSERT is permitted for PUBLISH")));
 
 	/* fetch columns that are keys for the table to be used in UPDATE/DELETE
 	 *  where clause,
@@ -3238,6 +3315,9 @@ redisPlanForeignModify(PlannerInfo *root,
 				        (errcode(ERRCODE_FDW_COLUMN_NAME_NOT_FOUND),
 					     errmsg("mandatory \"WHERE key = x AND member = x\"")));
 				break;
+			case PG_REDIS_PUBLISH:
+				/* INSERT only */
+				break;
 			default:
 				ereport(ERROR,
 				     (errcode(ERRCODE_FDW_ERROR),
@@ -3295,7 +3375,8 @@ redisPlanForeignModify(PlannerInfo *root,
 
 			switch (param->var_field) {
 			case VAR_KEY:
-				rctx->param_flags |= PARAM_KEY;
+			case VAR_CHANNEL:
+				rctx->param_flags |= PARAM_KEY | PARAM_CHANNEL;
 				break;
 			case VAR_FIELD:
 				rctx->param_flags |= PARAM_FIELD;
@@ -3319,6 +3400,8 @@ redisPlanForeignModify(PlannerInfo *root,
 			case VAR_I_VALUE:
 				rctx->param_flags |= PARAM_VALUE;
 				break;
+			case VAR_MESSAGE:
+				rctx->param_flags |= PARAM_MESSAGE;
 			default:
 				DEBUG((DEBUG_LEVEL, "skipping parameter"));
 				break;
@@ -3550,6 +3633,7 @@ redisExecForeignInsert(EState *estate,
 
 		switch (param->var_field) {
 		case VAR_KEY:
+		case VAR_CHANNEL:
 			if (isnull)
 				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
 				            (ERROR, "key must not be NULL"));
@@ -3600,6 +3684,12 @@ redisExecForeignInsert(EState *estate,
 					ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
 					    (ERROR, "invalid value for expiry %s", param->value));
 			}
+			break;
+		case VAR_MESSAGE:
+			if (isnull)
+				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
+				            (ERROR, "message must not be NULL"));
+			val = param->value;
 			break;
 		default:
 			break;
@@ -3721,6 +3811,18 @@ redisExecForeignInsert(EState *estate,
 		}
 		rctx->expiry = 0;
 		break;
+	case PG_REDIS_PUBLISH:
+		/* INSERT (channel, message) */
+		rctx->cmd = REDIS_PUBLISH;
+		DEBUG((DEBUG_LEVEL, "PUBLISH %s %s", rctx->pfxkey, val));
+		reply = redisCommand(rctx->r_ctx, "PUBLISH %s %s",
+		                     rctx->pfxkey, val);
+
+		if (reply != NULL && reply->type != REDIS_REPLY_ERROR)
+			ival = reply->integer;
+
+		rctx->expiry = 0;
+		break;
 	default:
 		elog(ERROR, "insert on non-writable table %d", rctx->table_type);
 	}
@@ -3770,6 +3872,7 @@ redisExecForeignInsert(EState *estate,
 
 		switch (rctx->rtable.columns[i].var_field) {
 		case VAR_KEY:
+		case VAR_CHANNEL:
 			retval = rctx->key;
 			break;
 		case VAR_FIELD:
@@ -3778,6 +3881,8 @@ redisExecForeignInsert(EState *estate,
 		case VAR_ARRAY_FIELD:
 			break;
 		case VAR_S_VALUE:
+		case VAR_MESSAGE:
+		case VAR_MEMBER:
 			retval = val;
 			break;
 		case VAR_SARRAY_VALUE:
@@ -3785,9 +3890,6 @@ redisExecForeignInsert(EState *estate,
 		case VAR_I_VALUE:
 			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
 			retval = pstrdup(vbuf);
-			break;
-		case VAR_MEMBER:
-			retval = val;
 			break;
 		case VAR_MEMBERS:
 			break;
@@ -3806,6 +3908,10 @@ redisExecForeignInsert(EState *estate,
 		case VAR_SCARD:
 		case VAR_ZCARD:
 			snprintf(vbuf, sizeof(vbuf), "0");
+			retval = pstrdup(vbuf);
+			break;
+		case VAR_LEN:
+			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
 			retval = pstrdup(vbuf);
 			break;
 		default:

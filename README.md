@@ -74,7 +74,7 @@ Any extraneous columns defined are ignored and untested.
 ```
 
 - **tabletype** string, hash, mhash, set, zset, list, ttl, len
-- **key** if you want the table to be bound to a specific key. The "key" column must not be declared in the table if this option is used.
+- **key** if you want the table to be bound to a specific key. The "key" column must not be declared in the table if this option is used. For a **PUBLISH** table, use **channel** instead of **key**.
 - **keyprefix** to prefix all keys in the table, to assist with namespace separation from other keys in Redis
 - **readonly** no writes permitted
 - **database** for Redis database to use (an integer)
@@ -86,6 +86,7 @@ For all tables, tabletype is mandatory as it defines what the Redis data for tha
 - **set** - key-member
 - **zset** - key-member-score-index
 - **list** - key-index-value
+- **publish** - channel-message-len (INSERT: PUBLISH *channel message*, SELECT: PUBSUB NUMSUB *channel*)
 
 Non-redis data types, but useful tables:
 - **ttl** - key-expiry. Inspect or set/remove the expiry from a key.
@@ -201,6 +202,21 @@ Get or set the time to live (in seconds) of a key. If expiry is 0, then the key 
   ) SERVER localredis
     OPTIONS (tabletype 'ttl');
 ```
+### Publish
+
+**Read-Write**
+
+* SELECT performs "PUBSUB NUMSUB channel" to fetch the number of subscribers to the channel
+* INSERT performs "PUBLISH channel message" and places the number of subscribers who received the message on the RETURNING value of len
+
+```
+  CREATE FOREIGN TABLE rft_pub(
+      channel   TEXT,
+      message   TEXT,
+      len       INT,
+  ) SERVER localredis
+    OPTIONS (tabletype 'publish');
+```
 
 ### Len
 
@@ -262,7 +278,9 @@ The workaround is something like where `r.key = (<subquery>)`:
 
 ### PubSub
 
-PUB will be implemented shortly, although SUB won't be available from this module. SUB clients will need to connect to Redis directly.
+Only PUBSUB NUMSUB *channel* is implemented.
+
+SUB clients will need to connect to Redis directly.
 
 ## License:
 
