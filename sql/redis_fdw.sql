@@ -14,10 +14,11 @@ CREATE USER MAPPING FOR public SERVER localredis;
 -- STRING
 CREATE FOREIGN TABLE rft_str(
 	key    TEXT,
-	value  TEXT,
+	sval   TEXT,     -- relabeled field
 	expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'string', keyprefix 'rftc_', database '1');
+ALTER FOREIGN TABLE rft_str ALTER COLUMN sval OPTIONS (ADD redis 'value');
 
 -- HASH
 CREATE FOREIGN TABLE rft_hash(
@@ -97,17 +98,17 @@ CREATE FOREIGN TABLE rft_pub(
 -- ===================================================================
 
 -- STRING
-INSERT INTO rft_str (key, value) VALUES ('strkey', 'strval');
-INSERT INTO rft_str (key, value, expiry) VALUES ('strkey2', 'has-expiry', 30);
+INSERT INTO rft_str (key, sval) VALUES ('strkey', 'strval');
+INSERT INTO rft_str (key, sval, expiry) VALUES ('strkey2', 'has-expiry', 30);
 
 SELECT * FROM rft_str WHERE key = 'strkey';
 SELECT * FROM rft_str WHERE key = 'strkey2';
 
-UPDATE rft_str SET value = (SELECT 'updated-strval'::TEXT) WHERE key = 'strkey';
+UPDATE rft_str SET sval = (SELECT 'updated-strval'::TEXT) WHERE key = 'strkey';
 SELECT * FROM rft_str WHERE key = 'strkey';
 SELECT * FROM rft_str WHERE key = 'strkey2';
 
-UPDATE rft_str SET value = 'updated-strval2' WHERE key = (SELECT 'strkey'::TEXT);
+UPDATE rft_str SET sval = 'updated-strval2' WHERE key = (SELECT 'strkey'::TEXT);
 SELECT * FROM rft_str WHERE key = 'strkey';
 
 -- HASH

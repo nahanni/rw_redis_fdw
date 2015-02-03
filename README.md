@@ -50,7 +50,7 @@ Server options are optional if using the defaults.
 
 ## PostgreSQL Table Schema
 
-redis\_fdw expects the tables to be structured in a manner which helps it issue Redis commands and translate data. The default column names are listed below, however they can be relabeled if desired in which case the column option `param <redis_fdw_original>` must be provided to map to the original redis\_fdw name.
+redis\_fdw expects the tables to be structured in a manner which helps it issue Redis commands and translate data. The default column names are listed below, however they can be relabeled if desired in which case the column option `redis <redis_fdw_original>` must be provided to map to the original redis\_fdw name.
 
 ```
   CREATE FOREIGN TABLE rft_str (
@@ -59,7 +59,7 @@ redis\_fdw expects the tables to be structured in a manner which helps it issue 
      ...
   )...
 
-  ALTER FOREIGN TABLE rft_str ALTER COLUMN v OPTIONS (ADD param 'value');
+  ALTER FOREIGN TABLE rft_str ALTER COLUMN v OPTIONS (ADD redis 'value');
 ```
 
 Any extraneous columns defined are ignored and untested.

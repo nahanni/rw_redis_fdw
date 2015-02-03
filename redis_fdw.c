@@ -196,7 +196,7 @@ struct redis_fdw_option {
 #define OPT_CHANNEL   "channel"
 #define OPT_KEYPREFIX "keyprefix"
 #define OPT_TABLETYPE "tabletype"
-#define OPT_PARAM     "param"
+#define OPT_REDIS     "redis"
 #define OPT_READONLY  "readonly"
 
 static struct redis_fdw_option valid_options[] =
@@ -217,7 +217,7 @@ static struct redis_fdw_option valid_options[] =
 	{OPT_READONLY, ForeignTableRelationId},
 
 	/* Columns */
-	{OPT_PARAM, AttributeRelationId},
+	{OPT_REDIS, AttributeRelationId},
 
 	/* Sentinel */
 	{NULL, InvalidOid}
@@ -1300,7 +1300,7 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 		foreach (option, options) {
 			DefElem *def = (DefElem *)lfirst(option);
 
-			if (strcmp(def->defname, OPT_PARAM) == 0) {
+			if (strcmp(def->defname, OPT_REDIS) == 0) {
 				colname = ((Value *)(def->arg))->val.str;
 
 				DEBUG((DEBUG_LEVEL, "table %s column remapped (%s) -> (%s)",
@@ -1908,12 +1908,11 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 static char *
 redis_opt_string(DefElem *def, const char *key, char **field)
 {
-	bool set = false;
 	if (strcmp(def->defname, key) == 0) {
 		*field = defGetString(def);
-		set = true;
+		return *field;
 	}
-	return (set ? *field : NULL);
+	return NULL;
 }
 
 static enum redis_data_type
@@ -2815,9 +2814,8 @@ redisIterateForeignScan(ForeignScanState *node)
 				rctx->rowcount = 0;
 				break;
 			default:
-				ereport(ERROR,
-			        (errcode(ERRCODE_FDW_ERROR),
-			         errmsg("redis error: %s", rctx->r_reply->str)));
+				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
+				    (ERROR, "redis error: %s", rctx->r_reply->str));
 			}
 		} else {
 			ereport(ERROR,
@@ -2837,9 +2835,11 @@ redisIterateForeignScan(ForeignScanState *node)
 			rctx->r_reply = NULL;
 		}
 
-		if (rctx->r_ctx != NULL)
+		if (rctx->r_ctx != NULL) {
 			redisFree(rctx->r_ctx);
-		rctx->r_ctx = NULL;
+			rctx->r_ctx = NULL;
+		}
+
 		MemoryContextSwitchTo(old_ctx);
 		return slot;
 	}
@@ -3087,9 +3087,16 @@ fill_slot:
 static void
 redisReScanForeignScan(ForeignScanState *node)
 {
-	struct redis_fdw_ctx *rctx = (struct redis_fdw_ctx *)node->fdw_state;
+	struct redis_fdw_ctx *rctx;
 
 	DEBUG((DEBUG_LEVEL, "*** %s", __FUNCTION__));
+
+	rctx = (struct redis_fdw_ctx *)node->fdw_state;
+
+	if (rctx->r_reply != NULL) {
+		freeReplyObject(rctx->r_reply);
+		rctx->r_reply = NULL;
+	}
 
 	if (rctx->r_ctx != NULL) {
 		redisFree(rctx->r_ctx);
@@ -3108,6 +3115,11 @@ redisEndForeignScan(ForeignScanState *node)
 	DEBUG((DEBUG_LEVEL, "*** %s", __FUNCTION__));
 
 	rctx = (struct redis_fdw_ctx *)node->fdw_state;
+	if (rctx->r_reply != NULL) {
+		freeReplyObject(rctx->r_reply);
+		rctx->r_reply = NULL;
+	}
+
 	if (rctx->r_ctx != NULL) {
 		redisFree(rctx->r_ctx);
 		rctx->r_ctx = NULL;
@@ -3195,7 +3207,7 @@ redisAddForeignUpdateTargets(Query *parsetree,
 		foreach (option, options) {
 			DefElem *def = (DefElem *)lfirst(option);
 
-			if (strcmp(def->defname, OPT_PARAM) == 0) {
+			if (strcmp(def->defname, OPT_REDIS) == 0) {
 				colname = ((Value *)(def->arg))->val.str;
 
 				DEBUG((DEBUG_LEVEL, "column remapped (%s) -> (%s)",
@@ -3664,7 +3676,8 @@ redisExecForeignInsert(EState *estate,
 		case VAR_CHANNEL:
 			if (isnull)
 				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
-				            (ERROR, "key must not be NULL"));
+				           (ERROR, "%s must not be NULL",
+				            param->var_field == VAR_KEY ? "key" : "channel"));
 			rctx->key = param->value;
 			newkey = true;
 			break;
@@ -3681,8 +3694,8 @@ redisExecForeignInsert(EState *estate,
 			val = param->value;
 			break;
 		case VAR_INDEX:
-			/* TODO: can't easily insert into slot at index with one go,
-			         might make it so that if index is provided, the LSET
+			/* TODO for LIST: can't easily insert into slot at index in one go,
+			         might make it so that if index is provided, then use LSET
 			 */
 			if (!isnull)
 				rctx->where_conds.min = atoll(param->value);
