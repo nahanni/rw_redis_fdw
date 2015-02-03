@@ -89,9 +89,9 @@ PG_MODULE_MAGIC;
 
 #define DEBUG_LEVEL INFO
 
-#define ERR_CLEANUP(conn,reply,eparams)	do { 			\
+#define ERR_CLEANUP(reply,conn,eparams)	do { 			\
 		if ((reply) != NULL) freeReplyObject(reply); 	\
-		if ((conn) != NULL) redisFree(rctx->r_ctx);		\
+		if ((conn) != NULL) redisFree(conn);			\
 		reply = NULL; 									\
 		conn = NULL; 									\
 		elog eparams; 									\
@@ -1676,7 +1676,7 @@ redis_get_var(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel, Var *var)
  *    col <op> [const|param]
  *   - text ops:    =
  *   - integer ops: >, >=, =, <, <=
- *   - array ops:   @>, =               TODO
+ *   - array ops:   @>, =
  *
  * Only AND boolean is permitted   TODO permit OR in the future to enable
  *                                      multiple results from single connection
@@ -1908,9 +1908,12 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 static char *
 redis_opt_string(DefElem *def, const char *key, char **field)
 {
-	if (strcmp(def->defname, key) == 0)
+	bool set = false;
+	if (strcmp(def->defname, key) == 0) {
 		*field = defGetString(def);
-	return (*field);
+		set = true;
+	}
+	return (set ? *field : NULL);
 }
 
 static enum redis_data_type
@@ -1943,6 +1946,9 @@ redis_get_table_options(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 	UserMapping *mapping;
 	List     *options;
 	ListCell *lc;
+	bool o_port, o_db, o_ttype;
+
+	o_port = o_db = o_ttype = false;
 
 	/* Lookup foreign table catalog info. */
 	rctx->table = GetForeignTable(foreigntableid);
@@ -1961,41 +1967,62 @@ redis_get_table_options(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 	foreach (lc, options) {
 		DefElem *def = (DefElem *) lfirst(lc);
 		char *v;
-	
-		redis_opt_string(def, OPT_KEY, &rctx->key);
-		if (rctx->key != NULL) {
-			rctx->where_flags |= PARAM_KEY;
-		} else {
-			/* try "channel" instead for publish */
-			redis_opt_string(def, OPT_CHANNEL, &rctx->key);
-			if (rctx->key != NULL)
+
+		if (rctx->key == NULL) {
+			if (redis_opt_string(def, OPT_KEY, &rctx->key) != NULL) {
 				rctx->where_flags |= PARAM_KEY;
+				continue;
+			}
+			if (redis_opt_string(def, OPT_CHANNEL, &rctx->key) != NULL) {
+				/* try "channel" instead for publish */
+				rctx->where_flags |= PARAM_KEY;
+				continue;
+			}
 		}
 
-		redis_opt_string(def, OPT_HOST, &rctx->host);
-		redis_opt_string(def, "address", &rctx->host);
+		if (rctx->keyprefix == NULL &&
+		   redis_opt_string(def, OPT_KEYPREFIX, &rctx->keyprefix) != NULL)
+			continue;
 
-		v = NULL;
-		if (redis_opt_string(def, OPT_PORT, &v) != NULL)
+		if (rctx->host == NULL) {
+			/* allow host or address */
+			if (redis_opt_string(def, OPT_HOST, &rctx->host) == NULL)
+				redis_opt_string(def, "address", &rctx->host);
+			if (rctx->host != NULL)
+				continue;
+		}
+
+		if (rctx->password == NULL &&
+		   redis_opt_string(def, OPT_PASSWORD, &rctx->password) != NULL)
+			continue;
+
+		if (!o_port && redis_opt_string(def, OPT_PORT, &v) != NULL) {
 			rctx->port = atoi(v);
+			if (rctx->port <= 0)
+				ereport(ERROR,
+				        (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
+				         errmsg("invalid port (%s)", v)));
+			o_port = true;
+			continue;
+		}
 
-		v = NULL;
-		if (redis_opt_string(def, OPT_DATABASE, &v) != NULL) {
+		if (!o_db && redis_opt_string(def, OPT_DATABASE, &v) != NULL) {
 			rctx->database = atoi(v);
 			if (rctx->database < 0)
-				rctx->database = 0;
+				ereport(ERROR,
+				        (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
+				         errmsg("invalid database (%s)", v)));
+			o_db = true;
+			continue;
 		}
 
-		redis_opt_string(def, OPT_KEYPREFIX, &rctx->keyprefix);
-
-		v = NULL;
-		redis_opt_string(def, OPT_TABLETYPE, &v);	
-		if (v != NULL) {
+		if (!o_ttype && redis_opt_string(def, OPT_TABLETYPE, &v) != NULL) {
 			rctx->table_type = redis_str_to_tabletype(v);
 			if (rctx->table_type == PG_REDIS_INVALID)
 				ereport(ERROR,
 				        (errcode(ERRCODE_FDW_INVALID_OPTION_NAME),
 				         errmsg("invalid tabletype (%s)", v)));
+			o_ttype = true;
 		}
 	}
 
@@ -2005,10 +2032,6 @@ redis_get_table_options(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 
 	if (rctx->host == NULL)
 		rctx->host = "127.0.0.1";
-	if (rctx->port <= 0)
-		rctx->port = 6379;
-	if (rctx->database < 0)
-		rctx->database = 0;
 
 	rctx->where_conds.min = rctx->where_conds.max = -1;
 
@@ -2553,8 +2576,11 @@ redisIterateForeignScan(ForeignScanState *node)
 				    (ERROR, "NULL reply from redis"));
 
 			} else if (reply->type == REDIS_REPLY_ERROR) {
+				char *errmsg;
+
+				errmsg = pstrdup(reply->str);
 				ERR_CLEANUP(reply, rctx->r_ctx,
-				    (ERROR, "redis replied error on TTL: %s", reply->str));
+				    (ERROR, "redis replied error on TTL: %s", errmsg));
 			}
 
 			rctx->expiry = reply->integer;
@@ -2872,17 +2898,19 @@ redisIterateForeignScan(ForeignScanState *node)
 		break;
 
 	case REDIS_ZRANGE:
+		if (rctx->where_conds.max_op == ROP_EQ)
+			index = rctx->where_conds.max;
+		else
+			index = rctx->where_conds.min + rctx->rowsdone/2;
+		/* fall-through */
 	case REDIS_ZRANGEBYSCORE:
 		Assert(rctx->r_reply->elements >= rctx->rowsdone+1);
 		Assert(rctx->r_reply->element != NULL);
 
 		/*
-		 * can't really provide an index if a min value was a condition
-		 * because redis does not return the index number in reply.
+		 * if cmd == ZRANGEBYSCORE, then index is not usable because
+		 * redis doesn't return the index of the item XXX return -1 or NULL?
 		 */
-		if (rctx->cmd == REDIS_ZRANGE &&
-		    rctx->where_conds.min_op == ROP_INVALID)
-			index = rctx->rowsdone/2;
 
 		reply = rctx->r_reply->element[rctx->rowsdone++];
 		redis_get_reply(reply, &s_value, &i_value, &nil_value);
@@ -3828,8 +3856,11 @@ redisExecForeignInsert(EState *estate,
 	}
 
 	if (reply == NULL || reply->type == REDIS_REPLY_ERROR) {
+		char *errmsg;
+
+		errmsg = reply ? pstrdup(reply->str) : "";
 		ERR_CLEANUP(reply, rctx->r_ctx,
-		            (ERROR, "Redis cmd failed: %s", reply ? reply->str : ""));
+		            (ERROR, "Redis cmd failed: %s", errmsg));
 	}
 
 	freeReplyObject(reply);
@@ -4506,8 +4537,11 @@ redisExecForeignDelete(EState *estate,
 			DEBUG((DEBUG_LEVEL, "LPOP %s", rctx->pfxkey));
 			reply = redisCommand(rctx->r_ctx, "LPOP %s", rctx->pfxkey);
 			if (reply->type == REDIS_REPLY_ERROR) {
+				char *errmsg;
+
+				errmsg = pstrdup(reply->str);
 				ERR_CLEANUP(reply, rctx->r_ctx,
-				    (ERROR, "redis replied error on LPOP: %s", reply->str));
+				    (ERROR, "redis replied error on LPOP: %s", errmsg));
 			}
 		} else {
 
@@ -4517,8 +4551,11 @@ redisExecForeignDelete(EState *estate,
 			reply = redisCommand(rctx->r_ctx, "LSET %s %lld %s",
 			    rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC);
 			if (reply->type == REDIS_REPLY_ERROR) {
+				char *errmsg;
+
+				errmsg = pstrdup(reply->str);
 				ERR_CLEANUP(reply, rctx->r_ctx,
-				    (ERROR, "redis replied error on LSET: %s", reply->str));
+				    (ERROR, "redis replied error on LSET: %s", errmsg));
 			}
 			freeReplyObject(reply);
 
@@ -4558,8 +4595,11 @@ redisExecForeignDelete(EState *estate,
 	}
 
 	if (reply == NULL || reply->type == REDIS_REPLY_ERROR) {
+		char *errmsg;
+
+		errmsg = reply ? pstrdup(reply->str) : "";
 		ERR_CLEANUP(reply, rctx->r_ctx,
-		            (ERROR, "Redis cmd failed: %s", reply ? reply->str : ""));
+		            (ERROR, "Redis cmd failed: %s", errmsg));
 	}
 
 	freeReplyObject(reply);
@@ -4639,6 +4679,7 @@ redisEndForeignModify(EState *estate,
 
 	if (rctx) {
 		if (rctx->r_reply != NULL) {
+			freeReplyObject(rctx->r_reply);
 			rctx->r_reply = NULL;
 		}
 
