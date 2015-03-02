@@ -1,13 +1,12 @@
 # Writable Foreign Data Wrapper for Redis
 
-This PostgreSQL extension provides a Foreign Data Wrapper for read (SELECT) and write (INSERT, UPDATE, DELETE) access to Redis databases (http://redis.io).
+This PostgreSQL extension provides a Foreign Data Wrapper for read (SELECT) and write (INSERT, UPDATE, DELETE) access to Redis databases (http://redis.io). Supported Redis data types include: string, set, hash, list, zset, and pubsub.
 
-*Note* that this repository is called rw\_redis\_fdw as to not be confused with https://github.com/pg-redis-fdw/redis_fdw, which was used as a template for the table schema. Instructions hereon-in is in reference this repository's project only.
+*Note* that the output FDW module is called **redis\_fdw**, even though this repository is called rw\_redis\_fdw and not be confused with https://github.com/pg-redis-fdw/redis_fdw (which was used as a basis for the table schema), to enable existing users to migrate to this repo.  Instructions hereon-in refer to this repository only.
 
 redis\_fdw *(nahanni/rw\_redis\_fdw)* was written by Leon Dang, sponsored by Nahanni Systems Inc.
 
-This project is currently work in progress and may have experience significant changes until it becomes stable.
-Use this module with caution and at your own risk!
+This project is currently work in progress and may have experience significant changes until it becomes stable. Use it with caution and at your own risk!
 
 **PostgreSQL version compatibility**
 
@@ -32,10 +31,15 @@ where pgsql\_prefix is where you've installed PostgreSQL to, e.g. /usr/local/pos
 
 Server options are optional if using the defaults.
 
-- **host** (or "address") specify a unix socket absolute path, hostname or IP address, default *localhost*
-- **port** network port, default *6379*
-- **password** redis-authentication, no default
 
+|option|description|default|
+|---|---|---|
+|**host**|(or "*address*") Redis server's unix socket absolute path, hostname or IP address|localhost|
+|**port**|server network port|6379|
+|**password**|Redis-authentication|*no default*|
+
+
+Example of how to add a Redis backend:
 ```
   CREATE EXTENSION redis_fdw;
   
@@ -50,7 +54,7 @@ Server options are optional if using the defaults.
 
 ## PostgreSQL Table Schema
 
-redis\_fdw expects the tables to be structured in a manner which helps it issue Redis commands and translate data. The default column names are listed below, however they can be relabeled if desired in which case the column option `redis <redis_fdw_original>` must be provided to map to the original redis\_fdw name.
+redis\_fdw expects the tables to have a particular structure to help it issue Redis commands and translate data. The default column names for each table are listed in the following sections; if they are relabeled then the column option `redis <redis_fdw_original>` must be provided to map to the original redis\_fdw expected name. For example:
 
 ```
   CREATE FOREIGN TABLE rft_str (
@@ -73,28 +77,34 @@ Any extraneous columns defined are ignored and untested.
   OPTIONS ( <options> )
 ```
 
-- **tabletype** string, hash, mhash, set, zset, list, ttl, len
-- **key** if you want the table to be bound to a specific key. The "key" column must not be declared in the table if this option is used. For a **PUBLISH** table, use **channel** instead of **key**.
-- **keyprefix** to prefix all keys in the table, to assist with namespace separation from other keys in Redis
-- **readonly** no writes permitted
-- **database** for Redis database to use (an integer)
+|option|description|
+|------|-----------|
+| **tabletype**|**Mandatory** option. Specifies the Redis data type: string, hash, mhash, set, zset, list, ttl, len, publish|
+|**key**|bind table to a specific key. *Note*: do not specify a "key" column in the table if this option is used. For a **PUBLISH** table, use **channel** instead of **key**.|
+|**keyprefix**|prefix all keys in the table with this value. One use is to enable namespace separation from other keys in Redis|
+|**readonly**|read-only table, no writes permitted|
+|**database**|for Redis database to use (an integer)|
 
-For all tables, tabletype is mandatory as it defines what the Redis data for that table will be. It can be one of the following (refer to the subsections further below for operations that can be completed on them).
-- **string** - key-value pair
-- **hash** - key-field-value
-- **mhash** or **hmset** - key-field[]-value[]. Read-only table
-- **set** - key-member
-- **zset** - key-member-score-index
-- **list** - key-index-value
-- **publish** - channel-message-len (INSERT: PUBLISH *channel message*, SELECT: PUBSUB NUMSUB *channel*)
+*tabletype*, with column names, can be one of the following (refer to the subsections further below for operations that can be completed on them):
 
-Non-redis data types, but useful tables:
+ - **string** - key-value
+ - **hash** - key-field-value
+ - **mhash** or **hmset** - key-field[]-value[]. *Read-only table*
+ - **set** - key-member
+ - **zset** - key-member-score-index
+ - **list** - key-index-value
+ - **publish** - channel-message-len
+	 - INSERT issues PUBLISH *channel message*,
+	 - SELECT issues PUBSUB NUMSUB *channel*
+
+*tabletype* for non-redis data types, but useful tables:
+
 - **ttl** - key-expiry. Inspect or set/remove the expiry from a key.
 - **len** - key-tabletype-len. Retrieve the number of items in a key or the entire database.
 
-The **key** must be either defined as a column or a table option, but not both. 
+*key* must be either defined as a column or a table option, but not both. 
 
-Note that **expiry** (in seconds) is an optional column in all the tables. If it is specified, then redis\_fdw will query for the key's expiry along with the data to be fetched. This is only done once per unique key fetch, so it isn't too expensive.
+Note that **expiry** (in seconds) is an optional column in all the tables. If it is specified, then redis\_fdw will also fetch the key's expiry. This is only done once per unique key fetch, so it isn't too expensive.
 
 
 ### String key-value data type
@@ -129,7 +139,7 @@ Each row represents a field and value of the hash, so the **key** and **expiry**
 ### Multiple hash fields
 
 **Read-only**
-- *this might be changed to writable in the future, but for now it only supports SELECT queries*
+- *this might be changed to being writable in the future*
 
 ```
   CREATE FOREIGN TABLE rft_mhash(
@@ -193,7 +203,10 @@ Each row represents a field and value of the hash, so the **key** and **expiry**
 
 **Read-Write**
 
-Get or set the time to live (in seconds) of a key. If expiry is 0, then the key is made persistent. DELETE will delete the entire key.
+Get or set the time to live (in seconds) of a key.
+
+ - Set expiry = 0 to make the key persistent.
+ - DELETE will delete the entire key.
 
 ```
   CREATE FOREIGN TABLE rft_ttl(
@@ -206,8 +219,8 @@ Get or set the time to live (in seconds) of a key. If expiry is 0, then the key 
 
 **Read-Write**
 
-* SELECT performs "PUBSUB NUMSUB channel" to fetch the number of subscribers to the channel
-* INSERT performs "PUBLISH channel message" and places the number of subscribers who received the message on the RETURNING value of len
+* SELECT performs `PUBSUB NUMSUB channel` to fetch the number of subscribers to the channel
+* INSERT performs `PUBLISH channel message` and places the number of subscribers who received the message on the RETURNING value of len
 
 ```
   CREATE FOREIGN TABLE rft_pub(
@@ -222,7 +235,7 @@ Get or set the time to live (in seconds) of a key. If expiry is 0, then the key 
 
 **Read-only**
 
-Retrieve the length of a key or the database.
+Retrieve the length of a key or the database (if SELECT does not have WHERE key = xxxx).
 
 ```
   CREATE FOREIGN TABLE rft_len(
