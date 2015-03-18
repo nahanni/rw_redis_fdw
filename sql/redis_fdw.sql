@@ -142,7 +142,7 @@ INSERT INTO rft_set (key, member) VALUES ('skey', 'member2');
 INSERT INTO rft_set (key, member) VALUES ('skey', 'member3');
 INSERT INTO rft_set (key, member) VALUES ('skey', 'member4') RETURNING *;
 
-SELECT * from rft_set WHERE key = 'skey' ORDER BY member;
+SELECT * FROM rft_set WHERE key = 'skey' ORDER BY member;
 
 -- LIST
 INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx0', 0);
@@ -150,26 +150,34 @@ INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx1', 1);
 INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx2', 2);
 INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx3', 3);
 
-SELECT * from rft_list WHERE key = 'lkey';
+SELECT * FROM rft_list WHERE key = 'lkey';
 
 UPDATE rft_list SET value = 'updated-idx2' WHERE index = 1 and key = 'lkey';
 
-SELECT * from rft_list WHERE key = 'lkey';
+SELECT * FROM rft_list WHERE key = 'lkey';
+
+DELETE FROM rft_list WHERE key = 'lkey' AND value = 'idx3';
+
+SELECT * FROM rft_list WHERE key = 'lkey';
+
+--    delete non-existent value
+DELETE FROM rft_list WHERE key = 'lkey' AND value = 'some-value' RETURNING *;
+SELECT * FROM rft_list WHERE key = 'lkey';
 
 -- ZSET
 INSERT INTO rft_zset (key, member, score) VALUES ('zkey', 'member1', 1);
 INSERT INTO rft_zset (key, member, score) VALUES ('zkey', 'member2', 2);
 INSERT INTO rft_zset (key, member, score) VALUES ('zkey', 'member3', 3);
 
-SELECT * from rft_zset WHERE key = 'zkey';
+SELECT * FROM rft_zset WHERE key = 'zkey';
 
-SELECT * from rft_zset WHERE key = 'zkey' AND member = 'member2';
+SELECT * FROM rft_zset WHERE key = 'zkey' AND member = 'member2';
 
-SELECT * from rft_zset WHERE key = 'zkey' AND index = 1;
-SELECT * from rft_zset WHERE key = 'zkey' AND index > 1 AND index <= 3;
-SELECT * from rft_zset WHERE key = 'zkey' AND index > 0 AND index < 3;
+SELECT * FROM rft_zset WHERE key = 'zkey' AND index = 1;
+SELECT * FROM rft_zset WHERE key = 'zkey' AND index > 1 AND index <= 3;
+SELECT * FROM rft_zset WHERE key = 'zkey' AND index > 0 AND index < 3;
 
-SELECT * from rft_zset WHERE key = 'zkey' AND score > 1;
+SELECT * FROM rft_zset WHERE key = 'zkey' AND score > 1;
 
 -- TTL
 SELECT * FROM rft_ttl WHERE key = 'rftz_zkey';

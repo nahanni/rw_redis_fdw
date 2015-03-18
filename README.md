@@ -14,7 +14,7 @@ Currently tested against PostgreSQL 9.4. Other versions might work but unconfirm
 
 ## Building
 ### Dependencies:
-- hiredis - usually part of the Redis installation on your system, or obtain from source at https://github.com/redis/hireds.
+- hiredis - usually part of the Redis installation on your system, or obtain from source at https://github.com/redis/hiredis.
 - PostgreSQL pgxs - part of the PostgreSQL package or source SDK
 
 
@@ -155,8 +155,6 @@ Each row represents a field and value of the hash, so the **key** and **expiry**
 
 **Read-Write**
 
-- *currently only supports deletion of item at a particular index. Deletion of a value will be added in the future*
-
 ```
   CREATE FOREIGN TABLE rft_list(
       key    TEXT,
@@ -170,6 +168,7 @@ Each row represents a field and value of the hash, so the **key** and **expiry**
 - INSERT is the equivalent of RPUSH (add to the tail of the list)
 - UPDATE uses LSET to change the value of an item at the **index**
 - DELETE of `index = 0` uses LPOP (remove first item), otherwise redis\_fdw will rename the item at the specified index to a searchable string and delete that item.
+- DELETE of `value = x` uses `LREM key 1 value`, ie deletes only the first left instance of the value. If you specify both `value` and `index`, then only `value` is used for deletion (`index` is ignored)
 
 ### Set
 

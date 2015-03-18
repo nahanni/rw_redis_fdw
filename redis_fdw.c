@@ -467,6 +467,7 @@ struct redis_fdw_ctx {
 	AttrNumber field_attno;
 	AttrNumber index_attno;
 	AttrNumber member_attno;
+	AttrNumber value_attno;
 
 	AttInMetadata *attmeta;       /* for returning slot tuples */
 	char **slot_values;
@@ -1693,9 +1694,6 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 
 	HeapTuple tuple;
 	ListCell *cell;
-#ifdef DO_DEBUG
-	Oid       leftargtype;
-#endif
 	Oid       rightargtype;
 	Form_pg_operator form;
 	char      *arg;
@@ -1717,15 +1715,12 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 			elog(ERROR, "cache lookup failed for operator %u", oper->opno);
 		form = (Form_pg_operator) GETSTRUCT(tuple);
 		rightargtype = form->oprright;
-#ifdef DO_DEBUG
-		leftargtype = form->oprleft;
-#endif
 
 		rop = redis_opername_to_rop(NameStr(form->oprname));
 
 		DEBUG((DEBUG_LEVEL,
 		      "T_OpExpr %s[%d], leftargtype: %d, rightargtype: %d",
-		      NameStr(form->oprname), rop, leftargtype, rightargtype));
+		      NameStr(form->oprname), rop, form->oprleft, rightargtype));
 
 		ReleaseSysCache(tuple);
 
@@ -1788,6 +1783,12 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 			case VAR_TABLE_TYPE:
 				rctx->where_flags |= PARAM_TABLE_TYPE;
 				break;
+			case VAR_S_VALUE:
+				if (rctx->table_type == PG_REDIS_LIST) {
+					rctx->where_flags |= PARAM_VALUE;
+					break;
+				}
+				/* fall through for other table types */
 			default:
 				/*
 				DEBUG((DEBUG_LEVEL, "unhandled left index: %d", leftidx));
@@ -1795,7 +1796,7 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 				*/
 				ereport(ERROR,
 				   (errcode(ERRCODE_FDW_ERROR),
-				   errmsg("conditional left variable %s not permitted",
+				   errmsg("conditional left variable %s not permitted for table",
 				          FIELD_NAMES[leftidx])));
 			}
 
@@ -1847,6 +1848,7 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 					rctx->where_conds.field = arg;
 					break;
 				case VAR_MEMBER:
+				case VAR_S_VALUE:
 					rctx->where_conds.s_value = arg;
 					break;
 				case VAR_INDEX:
@@ -2550,6 +2552,11 @@ redisIterateForeignScan(ForeignScanState *node)
 				s_value = rctx->where_conds.s_value;
 			}
 
+			if (rctx->where_flags & PARAM_VALUE) {
+				DEBUG((DEBUG_LEVEL, "  setting value"));
+				s_value = rctx->where_conds.s_value;
+			}
+
 			if (rctx->where_flags & PARAM_INDEX) {
 				if (rctx->where_conds.max_op != ROP_EQ) {
 					elog(ERROR,
@@ -2630,7 +2637,12 @@ redisIterateForeignScan(ForeignScanState *node)
 				    (ERROR, "NULL reply from redis"));
 			break;
 		case PG_REDIS_LIST:
-			if (rctx->where_conds.max >= 0) {
+			if (rctx->where_conds.s_value != NULL) {
+				DEBUG((DEBUG_LEVEL, "Ignoring get list item by value"));
+				rctx->cmd = REDIS_DISCARD_RESULT;
+				rctx->rowcount = 0;
+				rctx->rowsdone = 1;
+			} else if (rctx->where_conds.max >= 0) {
 				DEBUG((DEBUG_LEVEL, "LINDEX %s %ld", rctx->pfxkey,
 				       rctx->where_conds.max));
 				rctx->r_reply = redisCommand(ctx, "LINDEX %s %ld",
@@ -3611,6 +3623,8 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 		                                               "index");
 		rctx->member_attno = ExecFindJunkAttributeInTlist(subplan->targetlist,
 		                                               "member");
+		rctx->value_attno = ExecFindJunkAttributeInTlist(subplan->targetlist,
+		                                               "value");
 	}
 
 	/* connect */
@@ -3999,7 +4013,7 @@ redis_get_resjunks(struct redis_fdw_ctx *rctx, TupleTableSlot *planSlot,
 			rj->key = DatumGetCString(OidFunctionCall1(
 		             rctx->rtable.columns[rctx->rtable.key-1].typoutput, 
 		             datum));
-			DEBUG((DEBUG_LEVEL, "update WHERE key = %s", rj->key));
+			DEBUG((DEBUG_LEVEL, "update/delete WHERE key = %s", rj->key));
 		}
 	}
 
@@ -4010,7 +4024,7 @@ redis_get_resjunks(struct redis_fdw_ctx *rctx, TupleTableSlot *planSlot,
 			rj->field = DatumGetCString(OidFunctionCall1(
 		               rctx->rtable.columns[rctx->rtable.field-1].typoutput, 
 		               datum));
-			DEBUG((DEBUG_LEVEL, "update WHERE field = %s", rj->field));
+			DEBUG((DEBUG_LEVEL, "update/delete WHERE field = %s", rj->field));
 		}
 	}
 
@@ -4023,7 +4037,8 @@ redis_get_resjunks(struct redis_fdw_ctx *rctx, TupleTableSlot *planSlot,
 		               rctx->rtable.columns[rctx->rtable.index-1].typoutput, 
 		               datum));
 			rj->index = atoll(s);
-			DEBUG((DEBUG_LEVEL, "update WHERE index = %ld [%s]", rj->index, s));
+			DEBUG((DEBUG_LEVEL, "update/delete WHERE index = %ld [%s]",
+			      rj->index, s));
 		}
 	}
 
@@ -4034,7 +4049,18 @@ redis_get_resjunks(struct redis_fdw_ctx *rctx, TupleTableSlot *planSlot,
 			rj->member = DatumGetCString(OidFunctionCall1(
 		               rctx->rtable.columns[rctx->rtable.member-1].typoutput, 
 		               datum));
-			DEBUG((DEBUG_LEVEL, "update WHERE member = %s", rj->member));
+			DEBUG((DEBUG_LEVEL, "update/delete WHERE member = %s", rj->member));
+		}
+	}
+
+	if (AttributeNumberIsValid(rctx->value_attno)) {
+		datum = ExecGetJunkAttribute(planSlot, rctx->value_attno, &isnull);
+		if (!isnull) {
+			rj->hasval |= PARAM_VALUE;
+			rj->member = DatumGetCString(OidFunctionCall1(
+		               rctx->rtable.columns[rctx->rtable.s_value-1].typoutput, 
+		               datum));
+			DEBUG((DEBUG_LEVEL, "update/delete WHERE value = %s", rj->member));
 		}
 	}
 }
@@ -4539,9 +4565,14 @@ redisExecForeignDelete(EState *estate,
 		break;
 	case PG_REDIS_LIST:
 		/*
-		 * DELETE WHERE key = x AND index = x
+		 * DELETE WHERE key = x AND [index = x | value = x]
 		 */
-		if ((rctx->where_flags & PARAM_INDEX) == 0) {
+		if ((rctx->where_flags & PARAM_VALUE)) {
+			/* delete value */
+			DEBUG((DEBUG_LEVEL, "LREM %s 1 %s", rctx->pfxkey, resjunk.member));
+			reply = redisCommand(rctx->r_ctx, "LREM %s 1 %s",
+			                     rctx->pfxkey, resjunk.member);
+		} else if ((rctx->where_flags & PARAM_INDEX) == 0) {
 			/* delete key */
 			DEBUG((DEBUG_LEVEL, "DEL %s", rctx->pfxkey));
 			reply = redisCommand(rctx->r_ctx, "DEL %s", rctx->pfxkey);
@@ -4613,6 +4644,16 @@ redisExecForeignDelete(EState *estate,
 		errmsg = reply ? pstrdup(reply->str) : "";
 		ERR_CLEANUP(reply, rctx->r_ctx,
 		            (ERROR, "Redis cmd failed: %s", errmsg));
+	}
+
+	if (reply->type == REDIS_REPLY_INTEGER) {
+		DEBUG((DEBUG_LEVEL, "Redis deletion returned %lld", reply->integer));
+		if (reply->integer == 0) {
+			resjunk.key = NULL;
+		}
+	} else {
+		DEBUG((DEBUG_LEVEL, "Unexpected redis reply type %s",
+		      reply_type_str(reply->type)));
 	}
 
 	freeReplyObject(reply);
