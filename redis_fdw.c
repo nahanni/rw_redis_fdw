@@ -4328,7 +4328,7 @@ redisExecForeignUpdate(EState *estate,
 				/* remove old member */
 				DEBUG((DEBUG_LEVEL, "SREM %s %s",
 				      rctx->pfxkey, resjunk.member));
-				reply = redisCommand(rctx->r_ctx, "SADD %s %s",
+				reply = redisCommand(rctx->r_ctx, "SREM %s %s",
 			                         rctx->pfxkey, resjunk.member);
 				if (reply->type == REDIS_REPLY_ERROR || reply->integer == 0) {
 					ERR_CLEANUP(reply, rctx->r_ctx,
