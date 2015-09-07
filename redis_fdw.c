@@ -2259,8 +2259,11 @@ redisGetForeignPlan(PlannerInfo *root,
 {
 	struct redis_fdw_ctx *rctx;
 	List *fdw_private;
-	List		*keep_clauses = NIL;
+	List *keep_clauses = NIL;
 	List *params_list = NIL;
+	#if PG_VERSION_NUM >= 90500
+       List *custom_list = NIL;
+       #endif
 	ListCell *lc1, *lc2;
 	struct redis_param_desc *rparam;
 
@@ -2295,8 +2298,13 @@ redisGetForeignPlan(PlannerInfo *root,
 	for (rparam = rctx->params; rparam != NULL; rparam = rparam->next)
 		params_list = lappend(params_list, rparam->param);
 
+	#if PG_VERSION_NUM >= 90500
+       return make_foreignscan(tlist, keep_clauses, baserel->relid,
+                                params_list, fdw_private, custom_list);
+       #else
 	return make_foreignscan(tlist, keep_clauses, baserel->relid,
 	                        params_list, fdw_private);
+	#endif
 }
 
 static void
@@ -3476,7 +3484,11 @@ redisPlanForeignModify(PlannerInfo *root,
 		rel = heap_open(rte->relid, NoLock);
 
 		/* figure out which attributes are affected */
+		#if PG_VERSION_NUM >= 90500
+               tmpset = bms_copy(rte->updatedCols);
+               #else
 		tmpset = bms_copy(rte->modifiedCols);
+		#endif
 
 		while ((i = bms_first_member(tmpset)) >= 0) {
 			/* bit numbers are offset by FirstLowInvalidHeapAttributeNumber */
