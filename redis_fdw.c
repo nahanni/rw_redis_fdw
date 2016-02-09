@@ -2246,6 +2246,7 @@ redisGetForeignPaths(PlannerInfo *root,
 	       total_cost,
 	       NIL,     /* no pathkeys */
 	       NULL,    /* no outer rel either */
+	       NIL,
 	       NIL));   /* no fdw_private data */
 }
 
@@ -2296,7 +2297,7 @@ redisGetForeignPlan(PlannerInfo *root,
 		params_list = lappend(params_list, rparam->param);
 
 	return make_foreignscan(tlist, keep_clauses, baserel->relid,
-	                        params_list, fdw_private);
+	                        params_list, fdw_private, NIL, NIL, NIL);
 }
 
 static void
@@ -3476,7 +3477,7 @@ redisPlanForeignModify(PlannerInfo *root,
 		rel = heap_open(rte->relid, NoLock);
 
 		/* figure out which attributes are affected */
-		tmpset = bms_copy(rte->modifiedCols);
+		tmpset = bms_copy(rte->updatedCols);
 
 		while ((i = bms_first_member(tmpset)) >= 0) {
 			/* bit numbers are offset by FirstLowInvalidHeapAttributeNumber */
