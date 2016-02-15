@@ -101,6 +101,7 @@ Any extraneous columns defined are ignored and untested.
 
 - **ttl** - key-expiry. Inspect or set/remove the expiry from a key.
 - **len** - key-tabletype-len. Retrieve the number of items in a key or the entire database.
+- **keys** - retreive all keys in the database
 
 *key* must be either defined as a column or a table option, but not both. 
 
@@ -244,6 +245,19 @@ Retrieve the length of a key or the database (if SELECT does not have WHERE key 
       expiry    INT
   ) SERVER localredis
     OPTIONS (tabletype 'len');
+```
+
+### Keys
+
+**Read-only**
+
+Retrieve all keys for the database. Use with special care and only on small key-spaces since it requires fetching all keys from redis which returns all keys as a single array which can hurt memory use significantly.
+
+```
+  CREATE FOREIGN TABLE rft_keys(
+      key       TEXT
+  ) SERVER localredis
+    OPTIONS (tabletype 'keys');
 ```
 
 ## Usage

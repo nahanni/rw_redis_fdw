@@ -243,6 +243,7 @@ enum redis_data_type {
 	PG_REDIS_LEN,     /* STRLEN, LLEN, HLEN, SCARD, ZCARD, DBSIZE */
 	PG_REDIS_TTL,     /* (select) TTL and (update) EXPIRE/PERSIST */
 	PG_REDIS_PUBLISH, /* PUBLISH */
+	PG_REDIS_KEYS,    /* KEYS * */
 
 	PG_REDIS_INVALID,
 };
@@ -343,6 +344,7 @@ enum redis_cmd {
 	REDIS_ZRANGE,
 	REDIS_ZRANGEBYSCORE,
 	REDIS_TTL,
+	REDIS_KEYS,
 
 	REDIS_SCARD,
 	REDIS_ZCARD,
@@ -1198,6 +1200,8 @@ redis_fdw_validator(PG_FUNCTION_ARGS)
 			else if (strcmp(typeval, "mhash") == 0 ||
 			         strcmp(typeval, "hmset") == 0)
 				tabletype = PG_REDIS_HMSET;
+			else if (strcmp(typeval, "keys") == 0)
+				tabletype = PG_REDIS_KEYS;
 			else if (strcmp(typeval, "list") == 0)
 				tabletype = PG_REDIS_LIST;
 			else if (strcmp(typeval,"publish") == 0)
@@ -1542,11 +1546,16 @@ validate_redis_opts(struct redis_fdw_ctx *rctx)
 		break;
 	case PG_REDIS_PUBLISH:
 		/*
-		 * TABLE (channel TEXT, message TEXT, len int)
+		 * TABLE (channel TEXT, message TEXT, len INT)
 		 *   len = number of subscribers to channel
 		 */
 		if (tbl->s_value <= 0)
 			EDYNPARAM(("PUBLISH: message column required"));
+		break;
+	case PG_REDIS_KEYS:
+		/*
+		 * Only key column is permitted.
+		 */
 		break;
 	default:
 		// shouldn't get here
@@ -1943,6 +1952,8 @@ redis_str_to_tabletype(const char *v) {
 		return PG_REDIS_TTL;
 	else if (strcmp(v, "publish") == 0)
 		return PG_REDIS_PUBLISH;
+	else if (strcmp(v, "keys") == 0)
+		return PG_REDIS_KEYS;
 
 	return PG_REDIS_INVALID;
 }
@@ -2176,6 +2187,9 @@ redisGetForeignRelSize(PlannerInfo *root,
 	case PG_REDIS_PUBLISH:
 		baserel->rows = 1;
 		break;
+	case PG_REDIS_KEYS:
+		reply = redisCommand(ctx, "DBSIZE");
+		break;
 	default:
 		break;
 	}
@@ -2203,11 +2217,13 @@ redisGetForeignRelSize(PlannerInfo *root,
 		i++;
 	}
 
-	if ((rctx->where_flags & PARAM_KEY) == 0)
-		ereport(ERROR,
-		   (errcode(ERRCODE_FDW_DYNAMIC_PARAMETER_VALUE_NEEDED),
-		    errmsg("\"%s\" missing in table option and WHERE clause",
-		    rctx->table_type == PG_REDIS_PUBLISH ? "channel" : "key")));
+	if (rctx->table_type != PG_REDIS_KEYS) {
+		if ((rctx->where_flags & PARAM_KEY) == 0)
+			ereport(ERROR,
+			   (errcode(ERRCODE_FDW_DYNAMIC_PARAMETER_VALUE_NEEDED),
+			    errmsg("\"%s\" missing in table option and WHERE clause",
+			    rctx->table_type == PG_REDIS_PUBLISH ? "channel" : "key")));
+	}
 
 	redisFree(ctx);
 	baserel->fdw_private = (void *) rctx;
@@ -2599,7 +2615,7 @@ redisIterateForeignScan(ForeignScanState *node)
 		ctx = redis_do_connect(rctx);
 
 		/* prefetch expiry if expiry column exists */
-		if (rctx->rtable.expiry >= 0 && rctx->table_type != PG_REDIS_TTL) {
+		if (rctx->rtable.expiry > 0 && rctx->table_type != PG_REDIS_TTL) {
 			reply = redisCommand(ctx, "TTL %s", rctx->pfxkey);
 			if (reply == NULL) {
 				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
@@ -2826,6 +2842,11 @@ redisIterateForeignScan(ForeignScanState *node)
 			rctx->r_reply = redisCommand(ctx, "PUBSUB NUMSUB %s", rctx->pfxkey);
 			rctx->cmd = REDIS_PSNUMSUB;
 			break;
+		case PG_REDIS_KEYS:
+			DEBUG((DEBUG_LEVEL, "KEYS *"));
+			rctx->r_reply = redisCommand(ctx, "KEYS *");
+			rctx->cmd = REDIS_KEYS;
+			break;
 
 		default:
 			break;
@@ -2927,7 +2948,7 @@ redisIterateForeignScan(ForeignScanState *node)
 		break;
 
 	case REDIS_HMGET:
-		/* Redis returns an array of values; conver to psql array */
+		/* Redis returns an array of values; convert to psql array */
 		redisarray_to_psqlarray(rctx->r_reply, NULL, &s_value);
 		rctx->rowcount = 0;
 		rctx->rowsdone++;
@@ -2991,6 +3012,14 @@ redisIterateForeignScan(ForeignScanState *node)
 		i_value = rctx->r_reply->element[1]->integer;
 		rctx->rowsdone = 1;
 		rctx->rowcount = 0;
+		break;
+
+	case REDIS_KEYS:
+		reply = rctx->r_reply->element[rctx->rowsdone];
+		redis_get_reply(reply, &s_value, &i_value, &nil_value);
+		rctx->rowcount--;
+		rctx->rowsdone++;
+		rctx->key = s_value;
 		break;
 
 	default:
@@ -3213,6 +3242,10 @@ redisAddForeignUpdateTargets(Query *parsetree,
 	if (table_type == PG_REDIS_INVALID)
 		ereport(ERROR,
 		        (errcode(ERRCODE_FDW_ERROR), errmsg("table type not found")));
+
+	if (table_type == PG_REDIS_KEYS)
+		ereport(ERROR,
+		        (errcode(ERRCODE_FDW_ERROR), errmsg("table read-only")));
 
 	if (table_type == PG_REDIS_PUBLISH)
 		ereport(ERROR,
@@ -4790,7 +4823,8 @@ redisIsForeignRelUpdatable(Relation rel)
 			char *typeval = defGetString(def);
 			if (strcmp(typeval, "len") == 0 ||
 			    strcmp(typeval, "hmset") == 0 ||
-			    strcmp(typeval, "mhash") == 0)
+			    strcmp(typeval, "mhash") == 0 ||
+			    strcmp(typeval, "keys") == 0)
 				return 0;
 		}
 	}
