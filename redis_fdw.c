@@ -119,7 +119,13 @@ static ForeignScan *redisGetForeignPlan(PlannerInfo *root,
         Oid foreigntableid,
         ForeignPath *best_path,
         List *tlist,
-        List *scan_clauses);
+#if PG_VERSION_NUM < 90500
+        List *scan_clauses
+#else
+        List *scan_clauses,
+        Plan *outer_plan
+#endif
+);
 
 static void redisBeginForeignScan(ForeignScanState *node,
         int eflags);
@@ -2246,6 +2252,9 @@ redisGetForeignPaths(PlannerInfo *root,
 	       total_cost,
 	       NIL,     /* no pathkeys */
 	       NULL,    /* no outer rel either */
+#if PG_VERSION_NUM >= 90500
+               NULL,    /* no extra plan */
+#endif
 	       NIL));   /* no fdw_private data */
 }
 
@@ -2255,7 +2264,13 @@ redisGetForeignPlan(PlannerInfo *root,
 					Oid foreigntableid,
 					ForeignPath *best_path,
 					List *tlist,
-					List *scan_clauses)
+#if PG_VERSION_NUM < 90500
+					List *scan_clauses
+#else
+					List *scan_clauses,
+					Plan *outer_plan
+#endif
+                   )
 {
 	struct redis_fdw_ctx *rctx;
 	List *fdw_private;
@@ -2296,7 +2311,16 @@ redisGetForeignPlan(PlannerInfo *root,
 		params_list = lappend(params_list, rparam->param);
 
 	return make_foreignscan(tlist, keep_clauses, baserel->relid,
-	                        params_list, fdw_private);
+	                        params_list,
+#if PG_VERSION_NUM < 90500
+                                fdw_private
+#else
+                                fdw_private,
+                                NIL,       /* no custom tlist */
+                                NIL,       /* no remote quals */
+                                outer_plan
+#endif
+                               );
 }
 
 static void
@@ -2429,7 +2453,7 @@ redisIterateForeignScan(ForeignScanState *node)
 	int64_t i_value = 0;
 	int64_t index = 0;
 	char   *s_score = NULL;
-	int64_t score;
+	int64_t score = 0;
 
 	int i;
 
@@ -2543,17 +2567,17 @@ redisIterateForeignScan(ForeignScanState *node)
 			rctx->rowsdone = 1;
 
 			if (rctx->where_flags & PARAM_FIELD) {
-				DEBUG((DEBUG_LEVEL, "  setting field"));
+				DEBUG((DEBUG_LEVEL, "  setting field (%s)", rctx->where_conds.field));
 				field = rctx->where_conds.field;
 			}
 
 			if (rctx->where_flags & PARAM_MEMBER) {
-				DEBUG((DEBUG_LEVEL, "  setting member"));
+				DEBUG((DEBUG_LEVEL, "  setting member (%s)", rctx->where_conds.s_value));
 				s_value = rctx->where_conds.s_value;
 			}
 
 			if (rctx->where_flags & PARAM_VALUE) {
-				DEBUG((DEBUG_LEVEL, "  setting value"));
+				DEBUG((DEBUG_LEVEL, "  setting value (%s)", rctx->where_conds.s_value));
 				s_value = rctx->where_conds.s_value;
 			}
 
@@ -2563,7 +2587,7 @@ redisIterateForeignScan(ForeignScanState *node)
 					     "UPDATE/DELETE only allows INDEX \"=\" operator");
 				}
 
-				DEBUG((DEBUG_LEVEL, "  setting index"));
+				DEBUG((DEBUG_LEVEL, "  setting index (%ld)", rctx->where_conds.max));
 				index = rctx->where_conds.max;
 			}
 
@@ -3476,7 +3500,11 @@ redisPlanForeignModify(PlannerInfo *root,
 		rel = heap_open(rte->relid, NoLock);
 
 		/* figure out which attributes are affected */
+#if PG_VERSION_NUM < 90500
 		tmpset = bms_copy(rte->modifiedCols);
+#else
+		tmpset = bms_copy(rte->updatedCols);
+#endif
 
 		while ((i = bms_first_member(tmpset)) >= 0) {
 			/* bit numbers are offset by FirstLowInvalidHeapAttributeNumber */
