@@ -225,7 +225,7 @@ Get or set the time to live (in seconds) of a key.
   CREATE FOREIGN TABLE rft_pub(
       channel   TEXT,
       message   TEXT,
-      len       INT,
+      len       INT
   ) SERVER localredis
     OPTIONS (tabletype 'publish');
 ```
