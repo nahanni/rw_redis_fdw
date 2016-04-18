@@ -4416,6 +4416,17 @@ redisExecForeignUpdate(EState *estate,
 
 		if (set_params & PARAM_MEMBER) {
 			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %s", rctx->pfxkey, score, member));
+			if (resjunk.hasval & PARAM_MEMBER) {
+				/* remove old member */
+				DEBUG((DEBUG_LEVEL, "ZREM %s %s",
+				      rctx->pfxkey, resjunk.member));
+				reply = redisCommand(rctx->r_ctx, "ZREM %s %s",
+			                         rctx->pfxkey, resjunk.member);
+				if (reply->type == REDIS_REPLY_ERROR || reply->integer == 0) {
+					ERR_CLEANUP(reply, rctx->r_ctx,
+					    (ERROR, "member %s does not exist", resjunk.member));
+				}
+			}
 			reply = redisCommand(rctx->r_ctx, "ZADD %s %lld %s",
 			                     rctx->pfxkey, score, member);
 		} else {
