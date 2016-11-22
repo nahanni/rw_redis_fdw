@@ -4416,7 +4416,7 @@ redisExecForeignUpdate(EState *estate,
 
 		if (set_params & PARAM_MEMBER) {
 			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %s", rctx->pfxkey, score, member));
-			if (resjunk.hasval & PARAM_MEMBER) {
+			if (resjunk.hasval & PARAM_MEMBER && strcmp(member, resjunk.member) != 0) {
 				/* remove old member */
 				DEBUG((DEBUG_LEVEL, "ZREM %s %s",
 				      rctx->pfxkey, resjunk.member));
