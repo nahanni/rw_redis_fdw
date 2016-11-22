@@ -2843,8 +2843,14 @@ redisIterateForeignScan(ForeignScanState *node)
 			rctx->cmd = REDIS_PSNUMSUB;
 			break;
 		case PG_REDIS_KEYS:
-			DEBUG((DEBUG_LEVEL, "KEYS *"));
-			rctx->r_reply = redisCommand(ctx, "KEYS *");
+			if (NULL != rctx->key) {
+				DEBUG((DEBUG_LEVEL, "KEYS %s", rctx->key));
+				rctx->r_reply = redisCommand(ctx, "KEYS %s", rctx->key);
+			}
+			else {
+				DEBUG((DEBUG_LEVEL, "KEYS *"));
+				rctx->r_reply = redisCommand(ctx, "KEYS *");
+			}
 			rctx->cmd = REDIS_KEYS;
 			break;
 
