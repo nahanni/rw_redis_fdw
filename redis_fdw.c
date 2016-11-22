@@ -2846,8 +2846,7 @@ redisIterateForeignScan(ForeignScanState *node)
 			if (NULL != rctx->key) {
 				DEBUG((DEBUG_LEVEL, "KEYS %s", rctx->key));
 				rctx->r_reply = redisCommand(ctx, "KEYS %s", rctx->key);
-			}
-			else {
+			} else {
 				DEBUG((DEBUG_LEVEL, "KEYS *"));
 				rctx->r_reply = redisCommand(ctx, "KEYS *");
 			}
