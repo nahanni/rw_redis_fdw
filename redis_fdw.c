@@ -2559,6 +2559,14 @@ redisIterateForeignScan(ForeignScanState *node)
 			}
 		}
 
+		/* Ensure key exists for key-mandatory tables */
+		if (rctx->table_type != PG_REDIS_LEN && rctx->table_type != PG_REDIS_KEYS) {
+			if (rctx->key == NULL)
+				ereport(ERROR,
+				    (errcode(ERRCODE_FDW_INVALID_DATA_TYPE),
+				     errmsg("key is NULL")));
+		}
+
 		if (rctx->pfxkey == NULL) {
 			if (rctx->keyprefix != NULL) {
 				rctx->pfxkey = (char *)palloc(strlen(rctx->keyprefix) +
@@ -2803,15 +2811,15 @@ redisIterateForeignScan(ForeignScanState *node)
 					rctx->r_reply = redisCommand(ctx, "STRLEN %s",
 					                             rctx->pfxkey);
 				} else if (strcmp(table_type, "hash") == 0) {
-					DEBUG((DEBUG_LEVEL, "HLEN %s", rctx->key));
+					DEBUG((DEBUG_LEVEL, "HLEN %s", rctx->pfxkey));
 					rctx->r_reply = redisCommand(ctx, "HLEN %s",
 					                             rctx->pfxkey);
 				} else if (strcmp(table_type, "list") == 0) {
-					DEBUG((DEBUG_LEVEL, "LLEN %s", rctx->key));
+					DEBUG((DEBUG_LEVEL, "LLEN %s", rctx->pfxkey));
 					rctx->r_reply = redisCommand(ctx, "LLEN %s",
 					                             rctx->pfxkey);
 				} else if (strcmp(table_type, "set") == 0) {
-					DEBUG((DEBUG_LEVEL, "SCARD %s", rctx->key));
+					DEBUG((DEBUG_LEVEL, "SCARD %s", rctx->pfxkey));
 					rctx->r_reply = redisCommand(ctx, "SCARD %s",
 					                             rctx->pfxkey);
 				} else if (strcmp(table_type, "zset") == 0) {
@@ -3565,7 +3573,7 @@ redisPlanForeignModify(PlannerInfo *root,
 
 			/* add param */
 			param = (struct redis_param_desc *)
-	       		 palloc(sizeof(struct redis_param_desc));
+			        palloc(sizeof(struct redis_param_desc));
 
 			param->var_field = rctx->rtable.columns[i].orig_var_field;
 			param->paramid = i;
