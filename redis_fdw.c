@@ -2723,7 +2723,7 @@ redisIterateForeignScan(ForeignScanState *node)
 			if (rctx->where_flags & PARAM_MEMBER) {
 				DEBUG((DEBUG_LEVEL, "SISMEMBER %s %s", rctx->pfxkey,
 				      rctx->where_conds.s_value));
-				rctx->r_reply = redisCommand(ctx, "SISMEMBER %s",
+				rctx->r_reply = redisCommand(ctx, "SISMEMBER %s %s",
 				                     rctx->pfxkey, rctx->where_conds.s_value);
 				rctx->cmd = REDIS_SISMEMBER;
 			} else {
