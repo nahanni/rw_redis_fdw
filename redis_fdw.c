@@ -2263,7 +2263,11 @@ redisGetForeignPaths(PlannerInfo *root,
 
 	/* Create a ForeignPath node and add it as only possible path */
 	add_path(baserel,
-	   (Path *)create_foreignscan_path(root, baserel, baserel->rows,
+	   (Path *)create_foreignscan_path(root, baserel,
+#if PG_VERSION_NUM >= 90600
+	       NULL,    /* default pathtarget */
+#endif
+	       baserel->rows,
 	       startup_cost,
 	       total_cost,
 	       NIL,     /* no pathkeys */

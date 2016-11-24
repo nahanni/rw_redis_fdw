@@ -10,7 +10,7 @@ This project is currently work in progress and may have experience significant c
 
 **PostgreSQL version compatibility**
 
-Currently tested against PostgreSQL 9.4 and 9.5. Other versions might work but unconfirmed.
+Currently tested against PostgreSQL 9.4, 9.5, and 9.6. Other versions might work but unconfirmed.
 
 ## Building
 ### Dependencies:
