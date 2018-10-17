@@ -2496,7 +2496,11 @@ redisIterateForeignScan(ForeignScanState *node)
 		for (param = rctx->params; param; param = param->next) {
 			ExprState *expr_state = param->param;
 
-			datum = ExecEvalExpr(expr_state, econtext,&is_null, NULL);
+#if PG_VERSION_NUM < 100000
+			datum = ExecEvalExpr(expr_state, econtext, &is_null, NULL);
+#else
+			datum = ExecEvalExpr(expr_state, econtext, &is_null);
+#endif
 
 			if (is_null) {
 				param->value = NULL;
