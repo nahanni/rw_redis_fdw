@@ -1299,7 +1299,11 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 
 	/* loop through foreign table columns */
 	for (i = 0; i < tupdesc->natts; i++) {
+#if PG_VERSION_NUM < 110000
 		Form_pg_attribute att_tuple = tupdesc->attrs[i];
+#else
+		Form_pg_attribute att_tuple = &tupdesc->attrs[i];
+#endif
 		List *options;
 		ListCell *option;
 		bool optvalid;
@@ -2423,9 +2427,14 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	/* create a memory context for short-lived memory */
 	rctx->temp_ctx = AllocSetContextCreate(estate->es_query_cxt,
 		"redis_fdw temporary data",
+#if PG_VERSION_NUM < 110000
 		ALLOCSET_SMALL_MINSIZE,
 		ALLOCSET_SMALL_INITSIZE,
-		ALLOCSET_SMALL_MAXSIZE);
+		ALLOCSET_SMALL_MAXSIZE
+#else
+		ALLOCSET_DEFAULT_SIZES
+#endif
+		);
 }
 
 static int
@@ -3282,7 +3291,11 @@ redisAddForeignUpdateTargets(Query *parsetree,
 	 *     ZSET: key score member
 	 */
 	for (i = 0; i < tupdesc->natts; i++) {
+#if PG_VERSION_NUM < 110000
 		Form_pg_attribute att = tupdesc->attrs[i];
+#else
+		Form_pg_attribute att = &tupdesc->attrs[i];
+#endif
 		AttrNumber attrno = att->attnum;
 		Var *var;
 		TargetEntry *tle;
@@ -3715,9 +3728,14 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	/* create a memory context for short-lived memory */
 	rctx->temp_ctx = AllocSetContextCreate(estate->es_query_cxt,
 		"redis_fdw temporary data",
+#if PG_VERSION_NUM < 110000
 		ALLOCSET_SMALL_MINSIZE,
 		ALLOCSET_SMALL_INITSIZE,
-		ALLOCSET_SMALL_MAXSIZE);
+		ALLOCSET_SMALL_MAXSIZE
+#else
+		ALLOCSET_DEFAULT_SIZES
+#endif
+		);
 }
 
 static TupleTableSlot *
