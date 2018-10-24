@@ -518,9 +518,9 @@ dump_reply(redisReply *r, int level)
 	prefix[i] = '\0';
 
 	DEBUG((DEBUG_LEVEL,
-	    "  Reply: %s%s len(%d) str(%s) int(%lld) elements(%lu)",
-		prefix, reply_type_str(r->type), r->len, r->str, r->integer,
-		r->elements));
+	    "  Reply: %s%s len(%u) str(%s) int(%lld) elements(%lu)",
+	    prefix, reply_type_str(r->type), (unsigned)r->len, r->str,
+	    r->integer, r->elements));
 	if (r->elements > 0) {
 		for (i = 0; i < r->elements; i++) {
 			elem = r->element[i];
@@ -1780,6 +1780,9 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 				return false;
 			}
 
+			DEBUG((DEBUG_LEVEL, "subexpr type %d: %s",
+			      subexpr->type, nodeToString(subexpr)));
+
 			switch (leftidx) {
 			case VAR_KEY:
 				rctx->where_flags |= PARAM_KEY | PARAM_CHANNEL;
@@ -1846,7 +1849,6 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 				      "parameter (%s type=%d, id=%d) stashed: param %p %s",
 				      FIELD_NAMES[leftidx], param->paramtype,
 				      param->paramid, param, nodeToString(param)));
-
 			} else if (subexpr->type == T_Const) {
 				constant = (Const *)subexpr;
 
@@ -1894,8 +1896,8 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 				}
 
 			} else {
-				DEBUG((DEBUG_LEVEL, "unable to process subexpr type %d",
-				       subexpr->type));
+				DEBUG((DEBUG_LEVEL, "unable to process subexpr type %d: %s",
+				       subexpr->type, nodeToString(subexpr)));
 				return false;
 			}
 		}
@@ -2298,7 +2300,7 @@ redisGetForeignPlan(PlannerInfo *root,
 {
 	struct redis_fdw_ctx *rctx;
 	List *fdw_private;
-	List		*keep_clauses = NIL;
+	List *keep_clauses = NIL;
 	List *params_list = NIL;
 	ListCell *lc1, *lc2;
 	struct redis_param_desc *rparam;
@@ -2312,6 +2314,7 @@ redisGetForeignPlan(PlannerInfo *root,
 	/* keep only those clauses not handled by redis */
 	foreach(lc1, scan_clauses) {
 		int i = 0;
+
 		foreach(lc2, baserel->baserestrictinfo) {
 			if (equal(lfirst(lc1), lfirst(lc2)) && !rctx->pushdown_conds[i]) {
 				keep_clauses = lcons(lfirst(lc1), keep_clauses);
@@ -2337,14 +2340,14 @@ redisGetForeignPlan(PlannerInfo *root,
 	return make_foreignscan(tlist, keep_clauses, baserel->relid,
 	                        params_list,
 #if PG_VERSION_NUM < 90500
-                                fdw_private
+	                        fdw_private
 #else
-                                fdw_private,
-                                NIL,       /* no custom tlist */
-                                NIL,       /* no remote quals */
-                                outer_plan
+	                        fdw_private,
+	                        NIL,       /* no custom tlist */
+	                        NIL,       /* no remote quals */
+	                        outer_plan
 #endif
-                               );
+	                       );
 }
 
 static void
@@ -2364,13 +2367,19 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	rctx = redis_deserialize_fdw(fdw_private);
 	node->fdw_state = (void *)rctx;
 
+	DEBUG((DEBUG_LEVEL, " fdw_exprs: %s", nodeToString(fsplan->fdw_exprs)));
+
 	/*
 	 * Prepare parameters that need to be extracted from psql query.
 	 */
+#if PG_VERSION_NUM >= 100000
+	exec_exprs = ExecInitExprList(fsplan->fdw_exprs, (PlanState *)node);
+#else
 	exec_exprs = (List *)ExecInitExpr((Expr *)fsplan->fdw_exprs,
 	                                  (PlanState *)node);
+#endif
 
-	/* DEBUG((DEBUG_LEVEL, " exec_exprs: %s", nodeToString(exec_exprs))); */
+	DEBUG((DEBUG_LEVEL, " exec_exprs: %s", nodeToString(exec_exprs)));
 
 	DEBUG((DEBUG_LEVEL, "rctx: host %s, port %d\n"
 	   "\tkey: %s\n"
