@@ -1829,7 +1829,8 @@ redis_parse_where(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel,
 			         errmsg("index and score are mutually exclusive")));
 
 
-			if (subexpr->type == T_Param || subexpr->type == T_RelabelType) {
+			if (subexpr->type == T_Param || subexpr->type == T_RelabelType ||
+			    subexpr->type == T_FuncExpr) {
 				struct redis_param_desc *pd;
 
 				param = (Param *)subexpr;
@@ -2343,8 +2344,8 @@ redisGetForeignPlan(PlannerInfo *root,
 	                        fdw_private
 #else
 	                        fdw_private,
-	                        NIL,       /* no custom tlist */
-	                        NIL,       /* no remote quals */
+	                        NIL,             /* no custom tlist */
+	                        NIL,             /* no remote quals */
 	                        outer_plan
 #endif
 	                       );
