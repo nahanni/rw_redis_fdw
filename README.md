@@ -2,7 +2,7 @@
 
 This PostgreSQL extension provides a Foreign Data Wrapper for read (SELECT) and write (INSERT, UPDATE, DELETE) access to Redis databases (http://redis.io). Supported Redis data types include: string, set, hash, list, zset, and pubsub.
 
-*Note* that the output FDW module is called **redis\_fdw**, even though this repository is called rw\_redis\_fdw and not be confused with https://github.com/pg-redis-fdw/redis_fdw (which was used as a basis for the table schema), to enable existing users to migrate to this repo.  Instructions hereon-in refer to this repository only.
+*Note* that the output FDW module is called **redis\_fdw**, even though this repository is called rw\_redis\_fdw and not be confused with https://github.com/pg-redis-fdw/redis_fdw (which was used as a basis for the table schema but with very different code), to enable existing users to migrate to this repo.  Instructions hereon-in refer to this repository only.
 
 redis\_fdw *(nahanni/rw\_redis\_fdw)* was written by Leon Dang, sponsored by Nahanni Systems Inc.
 
@@ -10,7 +10,7 @@ This project is currently work in progress and may have experience significant c
 
 **PostgreSQL version compatibility**
 
-Currently tested against PostgreSQL 9.4+, 10.5. Other versions might work but unconfirmed.
+Currently tested against PostgreSQL 9.4+, 10, 11, 12. Other versions might work but unconfirmed.
 
 ## Building
 ### Dependencies:
@@ -335,4 +335,4 @@ If you encounter an issue with the module, here are some ways that can assist in
 
 ## Authors
 
-Leon Dang http://nahannisys.com
+Leon Dang
