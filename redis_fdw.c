@@ -68,7 +68,14 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+
+#if PG_VERSION_NUM < 120000
 #include "optimizer/var.h"
+#else
+#include "access/table.h"
+#include "optimizer/optimizer.h"
+#endif
+
 #include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "utils/builtins.h"
@@ -78,6 +85,23 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+
+/*
+ * Postgres version dependent functions
+ */
+
+#if PG_VERSION_NUM < 120000
+#define RFDW_VERDEP_ExecStoreTuple(t,s,b) ExecStoreTuple(t,s,InvalidBuffer,b)
+#else
+#define RFDW_VERDEP_ExecStoreTuple(t,s,b) ExecStoreHeapTuple(t,s,b)
+#endif
+
+#ifndef ALLOCSET_DEFAULT_SIZES
+#define ALLOCSET_DEFAULT_SIZES \
+        ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE
+#endif
+
+
 
 PG_MODULE_MAGIC;
 
@@ -2280,7 +2304,7 @@ redisGetForeignPaths(PlannerInfo *root,
 	       NIL,     /* no pathkeys */
 	       NULL,    /* no outer rel either */
 #if PG_VERSION_NUM >= 90500
-               NULL,    /* no extra plan */
+	       NULL,    /* no extra plan */
 #endif
 	       NIL));   /* no fdw_private data */
 }
@@ -3183,7 +3207,7 @@ fill_slot:
 	}
 
 	tuple = BuildTupleFromCStrings(rctx->attmeta, rctx->slot_values);
-	ExecStoreTuple(tuple, slot, InvalidBuffer, false);
+	RFDW_VERDEP_ExecStoreTuple(tuple, slot, false);
 
 	MemoryContextSwitchTo(old_ctx);
 	return slot;
@@ -3738,14 +3762,7 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	/* create a memory context for short-lived memory */
 	rctx->temp_ctx = AllocSetContextCreate(estate->es_query_cxt,
 		"redis_fdw temporary data",
-#if PG_VERSION_NUM < 110000
-		ALLOCSET_SMALL_MINSIZE,
-		ALLOCSET_SMALL_INITSIZE,
-		ALLOCSET_SMALL_MAXSIZE
-#else
-		ALLOCSET_DEFAULT_SIZES
-#endif
-		);
+		ALLOCSET_DEFAULT_SIZES);
 }
 
 static TupleTableSlot *
@@ -4092,7 +4109,7 @@ redisExecForeignInsert(EState *estate,
 	}
 
 	tuple = BuildTupleFromCStrings(rctx->attmeta, rctx->slot_values);
-	ExecStoreTuple(tuple, slot, InvalidBuffer, false);
+	RFDW_VERDEP_ExecStoreTuple(tuple, slot, false);
 
 	MemoryContextSwitchTo(old_ctx);
 	return slot;
@@ -4607,7 +4624,7 @@ do_expiry:
 	}
 
 	tuple = BuildTupleFromCStrings(rctx->attmeta, rctx->slot_values);
-	ExecStoreTuple(tuple, slot, InvalidBuffer, false);
+	RFDW_VERDEP_ExecStoreTuple(tuple, slot, false);
 
 	MemoryContextSwitchTo(old_ctx);
 	return slot;
@@ -4836,7 +4853,7 @@ redisExecForeignDelete(EState *estate,
 	}
 
 	tuple = BuildTupleFromCStrings(rctx->attmeta, rctx->slot_values);
-	ExecStoreTuple(tuple, slot, InvalidBuffer, false);
+	RFDW_VERDEP_ExecStoreTuple(tuple, slot, false);
 
 	MemoryContextSwitchTo(old_ctx);
 	return slot;
