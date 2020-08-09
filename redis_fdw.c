@@ -113,12 +113,20 @@ PG_MODULE_MAGIC;
 
 #define DEBUG_LEVEL INFO
 
+
+/* Possible crashes if you call elog at the end of the macro. 
+ * Often you want to print reply fields with ERR_CLEANUP, 
+ * but reply was set to NULL early in this macro :-(
+ * For example:
+ * 			    ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
+ *				    (ERROR, "redis error: %s", rctx->r_reply->str));
+ */
 #define ERR_CLEANUP(reply,conn,eparams)	do { 			\
+ 		elog eparams; 									\       
 		if ((reply) != NULL) freeReplyObject(reply); 	\
 		if ((conn) != NULL) redisFree(conn);			\
 		reply = NULL; 									\
 		conn = NULL; 									\
-		elog eparams; 									\
 	} while (0)
 
 Datum redis_fdw_handler(PG_FUNCTION_ARGS);
@@ -286,6 +294,7 @@ enum redis_data_type {
 #define PARAM_TABLE_TYPE   0x0200
 #define PARAM_CHANNEL      0x0400
 #define PARAM_MESSAGE      0x0800
+#define PARAM_VALEXPIRE    0x1000
 
 /*
  * column names/ids that this module accepts
@@ -300,6 +309,7 @@ enum var_field {
 	VAR_MEMBER,
 	VAR_MEMBERS,
 	VAR_EXPIRY,
+    VAR_VALEXPIRE,
 	VAR_INDEX,
 	VAR_SCORE,
 	VAR_SZ_CARD,
@@ -321,6 +331,7 @@ static const char *FIELD_NAMES[] = {
 	[VAR_MEMBER]       = "member",
 	[VAR_MEMBERS]      = "members",
 	[VAR_EXPIRY]       = "expiry",
+	[VAR_VALEXPIRE]    = "valexpire",
 	[VAR_INDEX]        = "index",
 	[VAR_SCORE]        = "score",
 	[VAR_SZ_CARD]      = "szcard",
@@ -420,6 +431,7 @@ struct redis_table {
 	int member;
 	int members;         /* [] text */
 	int expiry;
+	int val_expire;
 	int index;
 	int score;
 	int szcard;          /* scard or zcard */
@@ -472,6 +484,7 @@ struct redis_fdw_ctx {
 
 	struct where_conds where_conds;
 	int64_t expiry;               /* expiry parameter */
+	int64_t val_expire;
 
 	unsigned long rowcount;       /* rows returned by redis */
 	unsigned long rowsdone;       /* rows already read from redis */
@@ -1437,6 +1450,15 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 			rtable->expiry = i+1;
 			rtable->columns[i].var_field = VAR_EXPIRY;
 			optvalid = true;
+		} else if (strcmp(colname, "valexpire") == 0) {
+			/* We can expire individual values only for set and only with KeyDB */
+			if (rctx->table_type == PG_REDIS_SET) {
+				verify_pgtable_coltype(R_INT, att_tuple->atttypid,
+									colname, tablename);
+				rtable->val_expire = i+1;
+				rtable->columns[i].var_field = VAR_VALEXPIRE;
+				optvalid = true;
+			}
 		} else if (strcmp(colname, "index") == 0) {
 			if (rctx->table_type == PG_REDIS_LIST ||
 			    rctx->table_type == PG_REDIS_ZSET) {
@@ -1547,6 +1569,10 @@ validate_redis_opts(struct redis_fdw_ctx *rctx)
 		/*
 		 * TABLE (key TEXT, members TEXT[], expiry INT)
 		 * TABLE (key TEXT, member TEXT, expiry INT)
+		 * TABLE (key TEXT, members TEXT[], val_expire INT)
+		 * TABLE (key TEXT, member TEXT, val_expire INT)
+		 * TABLE (key TEXT, members TEXT[], expiry INT, val_expire INT)
+		 * TABLE (key TEXT, member TEXT, expiry INT, val_expire INT)
 		 */
 		if (tbl->members <= 0 && tbl->member <= 0)
 			EDYNPARAM(("SET: members[] or member columns required"));
@@ -1700,6 +1726,8 @@ redis_get_var(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel, Var *var)
 			return VAR_MEMBERS;
 		if (rtable->expiry == var->varattno)
 			return VAR_EXPIRY;
+		if (rtable->val_expire == var->varattno)
+			return VAR_VALEXPIRE;			
 		if (rtable->index == var->varattno)
 			return VAR_INDEX;
 		if (rtable->score == var->varattno)
@@ -2535,6 +2563,10 @@ redisIterateForeignScan(ForeignScanState *node)
 			elog(ERROR, "expiry not supported in WHERE clause");
 		}
 
+		if (rctx->where_flags & PARAM_VALEXPIRE) {
+			elog(ERROR, "valexpire not supported in WHERE clause");
+		}
+
 		/* fetch parameters and assign to context conditionals */
 		for (param = rctx->params; param; param = param->next) {
 			ExprState *expr_state = param->param;
@@ -2583,6 +2615,9 @@ redisIterateForeignScan(ForeignScanState *node)
 					break;
 				case VAR_EXPIRY:
 					elog(ERROR, "expiry not permitted in WHERE clause");
+					break;
+				case VAR_VALEXPIRE:
+					elog(ERROR, "valexpire not permitted in WHERE clause");
 					break;
 				case VAR_INDEX:
 				case VAR_SCORE:
@@ -2693,6 +2728,24 @@ redisIterateForeignScan(ForeignScanState *node)
 			reply = NULL;
 		}
 
+		/* prefetch val_expire if val_expire column exists */
+		if ((rctx->rtable.val_expire > 0) && (rctx->table_type == PG_REDIS_SET) && (rctx->where_flags & PARAM_MEMBER)) {
+			reply = redisCommand(ctx, "TTL %s %s", rctx->pfxkey, rctx->where_conds.s_value);
+			if (reply == NULL) {
+				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
+				    (ERROR, "NULL reply from redis"));
+
+			} else if (reply->type == REDIS_REPLY_ERROR) {
+				char *errmsg;
+
+				errmsg = pstrdup(reply->str);
+				ERR_CLEANUP(reply, rctx->r_ctx,
+				    (ERROR, "redis replied error on TTL: %s", errmsg));
+			}
+			rctx->val_expire = reply->integer;
+			freeReplyObject(reply);
+			reply = NULL;
+		}
 		/* build query to send to redis */
 		switch (rctx->table_type) {
 		case PG_REDIS_STRING:
@@ -2887,7 +2940,7 @@ redisIterateForeignScan(ForeignScanState *node)
 			} else {
 				DEBUG((DEBUG_LEVEL, "DBSIZE"));
 				rctx->r_reply = redisCommand(ctx, "DBSIZE");
-				rctx->expiry = 0;
+				rctx->expiry = 0; // FIXME probably we need to clear rctx->val_expire
 				rctx->cmd = REDIS_DBSIZE;
 			}
 			break;
@@ -2915,7 +2968,6 @@ redisIterateForeignScan(ForeignScanState *node)
 		default:
 			break;
 		}
-
 		if (rctx->r_reply != NULL) {
 			switch (rctx->r_reply->type) {
 			case REDIS_REPLY_INTEGER:
@@ -2935,7 +2987,7 @@ redisIterateForeignScan(ForeignScanState *node)
 				rctx->rowcount = 0;
 				break;
 			default:
-				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
+			    ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
 				    (ERROR, "redis error: %s", rctx->r_reply->str));
 			}
 		} else {
@@ -3003,7 +3055,10 @@ redisIterateForeignScan(ForeignScanState *node)
 
 	case REDIS_SISMEMBER:
 		redis_get_reply(reply, &s_value, &i_value, &nil_value);
-		if (!nil_value)
+		DEBUG((DEBUG_LEVEL, "  GOT REDIS_SISMEMBER reply"));
+		Assert(reply != NULL);
+		// FIXME: very strange code, SISMEMBER always return int 0 or 1
+		if (nil_value)
 			nil_value = (i_value != 0);
 		else
 			s_value = rctx->where_conds.s_value;
@@ -3091,6 +3146,7 @@ redisIterateForeignScan(ForeignScanState *node)
 	}
 
 	if (nil_value) {
+		DEBUG((DEBUG_LEVEL, "NIL VALUE *******"));
 		if (rctx->r_reply != NULL) {
 			freeReplyObject(rctx->r_reply);
 			rctx->r_reply = NULL;
@@ -3133,7 +3189,7 @@ fill_slot:
 			value = s_value;
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", i_value);
+			snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
 			value = pstrdup(vbuf);
 			break;
 		case VAR_MEMBER:
@@ -3146,11 +3202,22 @@ fill_slot:
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
+		    DEBUG((DEBUG_LEVEL, "VAR_EXPIRY CASE"));
 			if (rctx->cmd == REDIS_TTL) {
-				snprintf(vbuf, sizeof(vbuf), "%ld", i_value);
+				snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
 				value = pstrdup(vbuf);
 			} else {
-				snprintf(vbuf, sizeof(vbuf), "%ld", rctx->expiry);
+				snprintf(vbuf, sizeof(vbuf), "%lld", rctx->expiry);
+				value = pstrdup(vbuf);
+			}
+			break;
+		case VAR_VALEXPIRE:
+		    DEBUG((DEBUG_LEVEL, "VAR_VALEXPIRE CASE"));
+			if (rctx->cmd == REDIS_TTL) {
+				snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
+				value = pstrdup(vbuf);
+			} else {
+				snprintf(vbuf, sizeof(vbuf), "%lld", rctx->val_expire);
 				value = pstrdup(vbuf);
 			}
 			break;
@@ -3160,14 +3227,14 @@ fill_slot:
 				if (!(rctx->where_flags & PARAM_INDEX)) {
 					value = NULL;
 				} else {
-					snprintf(vbuf, sizeof(vbuf), "%ld", index);
+					snprintf(vbuf, sizeof(vbuf), "%lld", index);
 					value = pstrdup(vbuf);
 				}
 			} else if (rctx->table_type == PG_REDIS_LIST) {
-				snprintf(vbuf, sizeof(vbuf), "%ld", rctx->where_conds.max);
+				snprintf(vbuf, sizeof(vbuf), "%lld", rctx->where_conds.max);
 				value = pstrdup(vbuf);
 			} else if ( rctx->table_type == PG_REDIS_ZSET) {
-				snprintf(vbuf, sizeof(vbuf), "%ld", index);
+				snprintf(vbuf, sizeof(vbuf), "%lld", index);
 				value = pstrdup(vbuf);
 			} else {
 				snprintf(vbuf, sizeof(vbuf), "%d", 0);
@@ -3179,7 +3246,7 @@ fill_slot:
 				if (s_score != NULL)
 					value = pstrdup(s_score);
 				else  {
-					snprintf(vbuf, sizeof(vbuf), "%ld", score);
+					snprintf(vbuf, sizeof(vbuf), "%lld", score);
 					value = pstrdup(vbuf);
 				}
 			} else {
@@ -3188,7 +3255,7 @@ fill_slot:
 			}
 			break;
 		case VAR_LEN:
-			snprintf(vbuf, sizeof(vbuf), "%ld", i_value);
+			snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
 			value = pstrdup(vbuf);
 			break;
 		case VAR_TABLE_TYPE:
@@ -3663,6 +3730,9 @@ redisPlanForeignModify(PlannerInfo *root,
 			case VAR_EXPIRY:
 				rctx->param_flags |= PARAM_EXPIRY;
 				break;
+			case VAR_VALEXPIRE:
+				rctx->param_flags |= PARAM_VALEXPIRE;
+				break;
 			case VAR_S_VALUE:
 			case VAR_I_VALUE:
 				rctx->param_flags |= PARAM_VALUE;
@@ -3800,6 +3870,7 @@ redisExecForeignInsert(EState *estate,
 	MemoryContextReset(rctx->temp_ctx);
 
 	rctx->expiry = 0;
+	rctx->val_expire = 0;
 	for (param = rctx->params; param != NULL; param = param->next) {
 		Datum datum = 0;
 		bool isnull;
@@ -3867,6 +3938,14 @@ redisExecForeignInsert(EState *estate,
 					    (ERROR, "invalid value for expiry %s", param->value));
 			}
 			break;
+		case VAR_VALEXPIRE:
+			if (!isnull) {
+				rctx->val_expire = atoll(param->value);
+				if (rctx->val_expire < 0)
+					ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
+					    (ERROR, "invalid value for val_expire %s", param->value));
+			}
+			break;			
 		case VAR_MESSAGE:
 			if (isnull)
 				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
@@ -3951,7 +4030,9 @@ redisExecForeignInsert(EState *estate,
 		}
 		break;
 	case PG_REDIS_SET:
-		/* INSERT (key, value) */
+		/* INSERT (key, value)
+		 * INSERT (key, value, valexpire)  but we will do it later!
+		 */
 		rctx->cmd = REDIS_SADD;
 
 		if (val) {
@@ -4040,6 +4121,34 @@ redisExecForeignInsert(EState *estate,
 		freeReplyObject(expreply);
 	}
 
+	if (rctx->val_expire > 0 && rctx->table_type == PG_REDIS_SET) {
+
+		if (val) {
+			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %s %lld", rctx->pfxkey, val, rctx->val_expire));
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %s %lld",
+		                			rctx->pfxkey, val, rctx->val_expire);
+		} else {
+			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %ld %lld", rctx->pfxkey, ival, rctx->val_expire));
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %ld %lld",
+		                			rctx->pfxkey, ival, rctx->val_expire);
+		}
+
+		if (expreply == NULL) {
+			redisFree(rctx->r_ctx);
+			ereport(ERROR,
+			   (errcode(ERRCODE_FDW_ERROR),
+			    errmsg("EXPIREMEMBER reply NULL")));
+		} else if (expreply->type == REDIS_REPLY_ERROR) {
+			freeReplyObject(expreply);
+			redisFree(rctx->r_ctx);
+
+			ereport(ERROR,
+			   (errcode(ERRCODE_FDW_ERROR),
+			    errmsg("Redis (KeyDB) EXPIREMEMBER cmd failed: %s", expreply->str)));
+		}
+		freeReplyObject(expreply);
+	}
+
 	old_ctx = MemoryContextSwitchTo(rctx->temp_ctx);
 
 	/* empty the result slot */
@@ -4073,21 +4182,25 @@ redisExecForeignInsert(EState *estate,
 		case VAR_SARRAY_VALUE:
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
-			snprintf(vbuf, sizeof(vbuf), "%ld", rctx->expiry);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->expiry);
+			retval = pstrdup(vbuf);
+			break;
+		case VAR_VALEXPIRE:
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->val_expire);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%ld", rctx->where_conds.min);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->where_conds.min);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCORE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", score);
+			snprintf(vbuf, sizeof(vbuf), "%lld", score);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCARD:
@@ -4096,7 +4209,7 @@ redisExecForeignInsert(EState *estate,
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_LEN:
-			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
 			retval = pstrdup(vbuf);
 			break;
 		default:
@@ -4305,6 +4418,16 @@ redisExecForeignUpdate(EState *estate,
 					set_params |= PARAM_EXPIRY;
 			}
 			break;
+		case VAR_VALEXPIRE:
+			DEBUG((DEBUG_LEVEL, "DETECTED val_expire = something"));
+			if (!isnull) {
+				rctx->val_expire = atoll(param->value);
+				if (rctx->val_expire > 0) {
+					DEBUG((DEBUG_LEVEL, "set_params |= PARAM_VALEXPIRE"));
+					set_params |= PARAM_VALEXPIRE;
+				}
+			}
+			break;
 		default:
 			break;
 		}
@@ -4447,7 +4570,7 @@ redisExecForeignUpdate(EState *estate,
 		}
 		break;
 	case PG_REDIS_SET:
-		/* UPDATE member WHERE key = x [ AND member = x ] */
+		/* UPDATE member WHERE key = x [ AND member = y ] */
 
 		/* remove old member and add new member to rename */
 		if (set_params & PARAM_MEMBER) {
@@ -4461,11 +4584,20 @@ redisExecForeignUpdate(EState *estate,
 					ERR_CLEANUP(reply, rctx->r_ctx,
 					    (ERROR, "member %s does not exist", resjunk.member));
 				}
+
+				if (set_params & PARAM_VALEXPIRE) {
+					//FIXME set EXPIREMEMBER here !!!
+					DEBUG((DEBUG_LEVEL, "PARAM_VALEXPIRE together with member change"));
+				}
 			}
 			DEBUG((DEBUG_LEVEL, "SADD %s %s", rctx->pfxkey, member));
 			reply = redisCommand(rctx->r_ctx, "SADD %s %s",
 			                     rctx->pfxkey, member);
 		} else {
+			if (set_params & PARAM_VALEXPIRE) {
+				//FIXME set EXPIREMEMBER here !!!
+				DEBUG((DEBUG_LEVEL, "PARAM_VALEXPIRE fix goto and error path"));
+			}
 			if (set_params & PARAM_EXPIRY)
 				goto do_expiry;
 
@@ -4589,7 +4721,7 @@ do_expiry:
 		case VAR_SARRAY_VALUE:
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_MEMBER:
@@ -4598,15 +4730,19 @@ do_expiry:
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
-			snprintf(vbuf, sizeof(vbuf), "%ld", rctx->expiry);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->expiry);
+			retval = pstrdup(vbuf);
+			break;
+		case VAR_VALEXPIRE:
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->val_expire);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%ld", resjunk.index);
+			snprintf(vbuf, sizeof(vbuf), "%lld", resjunk.index);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCORE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", score);
+			snprintf(vbuf, sizeof(vbuf), "%lld", score);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCARD:
@@ -4834,8 +4970,10 @@ redisExecForeignDelete(EState *estate,
 			break;
 		case VAR_EXPIRY:
 			break;
+		case VAR_VALEXPIRE:
+			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%ld", resjunk.index);
+			snprintf(vbuf, sizeof(vbuf), "%lld", resjunk.index);
 			retval = vbuf;
 			break;
 		case VAR_SCORE:
