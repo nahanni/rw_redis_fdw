@@ -122,7 +122,7 @@ PG_MODULE_MAGIC;
  *				    (ERROR, "redis error: %s", rctx->r_reply->str));
  */
 #define ERR_CLEANUP(reply,conn,eparams)	do { 			\
- 		elog eparams; 									\       
+ 		elog eparams; 									\
 		if ((reply) != NULL) freeReplyObject(reply); 	\
 		if ((conn) != NULL) redisFree(conn);			\
 		reply = NULL; 									\
