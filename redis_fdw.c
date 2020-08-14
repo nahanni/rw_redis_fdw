@@ -92,13 +92,23 @@
 
 #if PG_VERSION_NUM < 120000
 #define RFDW_VERDEP_ExecStoreTuple(t,s,b) ExecStoreTuple(t,s,InvalidBuffer,b)
+#define TABLE_OPEN(t,l) heap_open(t,l)
+#define TABLE_CLOSE(t,l) heap_close(t,l)
 #else
 #define RFDW_VERDEP_ExecStoreTuple(t,s,b) ExecStoreHeapTuple(t,s,b)
+#define TABLE_OPEN(t,l) table_open(t,l)
+#define TABLE_CLOSE(t,l) table_close(t,l)
 #endif
 
 #ifndef ALLOCSET_DEFAULT_SIZES
 #define ALLOCSET_DEFAULT_SIZES \
         ALLOCSET_DEFAULT_MINSIZE, ALLOCSET_DEFAULT_INITSIZE, ALLOCSET_DEFAULT_MAXSIZE
+#endif
+
+#if PG_VERSION_NUM < 130000
+#define PG_LIST_NEXT(l,lc) lnext(lc)
+#else
+#define PG_LIST_NEXT(l,lc) lnext(l,lc)
 #endif
 
 
@@ -921,7 +931,7 @@ redis_serialize_fdw(struct redis_fdw_ctx *rctx)
 
 	for (param = rctx->params; param != NULL; param = param->next) {
 		/* keep paramid which is the location of the parameter */
-		Assert(pram->param != NULL);
+		Assert(param->param != NULL);
 		result = lappend(result, serializeInt32(param->paramid));
 		result = lappend(result, serializeInt32(param->var_field));
 		result = lappend(result, serializeInt32(param->op));
@@ -963,61 +973,61 @@ redis_deserialize_fdw(List *list)
 	rctx = (struct redis_fdw_ctx *)palloc0(sizeof(struct redis_fdw_ctx));
 
 	redis_deserialize_rtable(rctx, lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	redis_deserialize_rtable_cols(rctx, lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->host = deserializeString(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->port = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->password = deserializeString(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->database = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->table_type = (enum redis_data_type)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->key = deserializeString(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 	rctx->keyprefix = deserializeString(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	wc = &rctx->where_conds;
 	wc->field = deserializeString(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 	wc->s_value = deserializeString(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 	wc->table_type = deserializeString(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	wc->i_value = deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	wc->min = deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 	wc->max = deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	wc->min_op = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 	wc->max_op = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->psql_cmd = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 	rctx->param_flags = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 	rctx->where_flags = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	len = (int)deserializeInt(lfirst(cell));
-	cell = lnext(cell);
+	cell = PG_LIST_NEXT(list, cell);
 
 	rctx->params = NULL;
 	pptr = &rctx->params;
@@ -1025,11 +1035,11 @@ redis_deserialize_fdw(List *list)
 		param = (struct redis_param_desc *)
 		        palloc(sizeof(struct redis_param_desc));
 		param->paramid = (int)deserializeInt(lfirst(cell));
-		cell = lnext(cell);
+		cell = PG_LIST_NEXT(list, cell);
 		param->var_field = (enum var_field)deserializeInt(lfirst(cell));
-		cell = lnext(cell);
+		cell = PG_LIST_NEXT(list, cell);
 		param->op = (enum redis_op)deserializeInt(lfirst(cell));
-		cell = lnext(cell);
+		cell = PG_LIST_NEXT(list, cell);
 
 		param->param = NULL;
 		param->value = NULL;
@@ -1309,7 +1319,7 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 	if (rtable->columns != NULL)
 		return;
 
-	rel = heap_open(foreigntableid, NoLock);
+	rel = TABLE_OPEN(foreigntableid, NoLock);
 	relid = RelationGetRelid(rel);
 	tupdesc = rel->rd_att;
 
@@ -1490,7 +1500,7 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 			continue;
 		}
 	}
-	heap_close(rel, NoLock);
+	TABLE_CLOSE(rel, NoLock);
 }
 
 /*
@@ -3598,7 +3608,7 @@ redisPlanForeignModify(PlannerInfo *root,
 		 * Core code already has some lock on each rel being planned,
 		 * so we can use NoLock here.
 		 */
-		rel = heap_open(rte->relid, NoLock);
+		rel = TABLE_OPEN(rte->relid, NoLock);
 
 		/* figure out which attributes are affected */
 #if PG_VERSION_NUM < 90500
@@ -3615,7 +3625,7 @@ redisPlanForeignModify(PlannerInfo *root,
 				elog(ERROR, "system-column update is not supported");
 			targetAttrs = lappend_int(targetAttrs, attno);
 		}
-		heap_close(rel, NoLock);
+		TABLE_CLOSE(rel, NoLock);
 
 		i = 0;
 		foreach(lc, targetAttrs) {
