@@ -553,8 +553,8 @@ dump_reply(redisReply *r, int level)
 
 	DEBUG((DEBUG_LEVEL,
 	    "  Reply: %s%s len(%u) str(%s) int(%lld) elements(%lu)",
-	    prefix, reply_type_str(r->type), (unsigned)r->len, r->str,
-	    r->integer, r->elements));
+	    prefix, reply_type_str(r->type), (unsigned)r->len,
+	    r->str ? r->str : "", r->integer, r->elements));
 	if (r->elements > 0) {
 		for (i = 0; i < r->elements; i++) {
 			elem = r->element[i];
@@ -2948,12 +2948,12 @@ redisIterateForeignScan(ForeignScanState *node)
 				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
 				    (ERROR, "redis error: %s", rctx->r_reply->str));
 			}
+
+			dump_reply(rctx->r_reply, 0);
 		} else {
 			ereport(ERROR,
 		        (errcode(ERRCODE_FDW_ERROR), errmsg("redis null reply")));
 		}
-
-		dump_reply(rctx->r_reply, 0);
 	}
 
 	/* initialize virtual tuple */
@@ -3013,10 +3013,10 @@ redisIterateForeignScan(ForeignScanState *node)
 
 	case REDIS_SISMEMBER:
 		redis_get_reply(reply, &s_value, &i_value, &nil_value);
-		if (!nil_value)
-			nil_value = (i_value != 0);
-		else
-			s_value = rctx->where_conds.s_value;
+
+		/* If no match, then set nil_value to true */
+		nil_value = (i_value == 0);
+		s_value = rctx->where_conds.s_value;
 		rctx->rowcount--;
 		rctx->rowsdone++;
 		break;
