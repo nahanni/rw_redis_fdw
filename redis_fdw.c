@@ -555,7 +555,7 @@ dump_reply(redisReply *r, int level)
 	prefix[i] = '\0';
 
 	DEBUG((DEBUG_LEVEL,
-	    "  Reply: %s%s len(%u) str(%s) int(%jd) elements(%lu)",
+	    "  Reply: %s%s len(%u) str(%s) int(%lld) elements(%lu)",
 	    prefix, reply_type_str(r->type), (unsigned)r->len, r->str,
 	    r->integer, r->elements));
 	if (r->elements > 0) {
@@ -2257,7 +2257,7 @@ redisGetForeignRelSize(PlannerInfo *root,
 	if (reply != NULL) {
 		Assert(reply->type == REDIS_REPLY_INTEGER);
 		baserel->rows = reply->integer;
-		DEBUG((DEBUG_LEVEL, "number of items for key: %jd", reply->integer));
+		DEBUG((DEBUG_LEVEL, "number of items for key: %lld", reply->integer));
 		freeReplyObject(reply);
 	}
 
@@ -4922,7 +4922,7 @@ redisExecForeignDelete(EState *estate,
 	}
 
 	if (reply->type == REDIS_REPLY_INTEGER) {
-		DEBUG((DEBUG_LEVEL, "Redis deletion returned %jd", reply->integer));
+		DEBUG((DEBUG_LEVEL, "Redis deletion returned %lld", reply->integer));
 		if (reply->integer == 0) {
 			resjunk.key = NULL;
 		}
