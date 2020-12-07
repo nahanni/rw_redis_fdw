@@ -237,6 +237,7 @@ SELECT * FROM rft_list WHERE key = 'lkey';
 
 DELETE FROM rft_set WHERE key = 'skey' AND member = 'member2';
 SELECT * FROM rft_set WHERE key = 'skey' ORDER BY member;
+SELECT * FROM rft_set WHERE key = 'skey' AND member = 'member3';
 
 DELETE FROM rft_zset WHERE key = 'zkey' AND member = 'member3';
 SELECT * FROM rft_zset WHERE key = 'zkey';
