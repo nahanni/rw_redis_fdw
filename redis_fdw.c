@@ -728,9 +728,9 @@ redisarray_to_psqlarray(redisReply *reply, char **fields, char **values)
 
 		case REDIS_REPLY_INTEGER:
 			if (fields != NULL && (i & 0x01) == 0)
-				appendStringInfo(res_f, "%jd", elem->integer);
+				appendStringInfo(res_f, "%lld", elem->integer);
 			else
-				appendStringInfo(res_v, "%jd", elem->integer);
+				appendStringInfo(res_v, "%lld", elem->integer);
 			break;
 
 		case REDIS_REPLY_NIL:
