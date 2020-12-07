@@ -1,0 +1,5 @@
+2020-12-03 Version 1.0.2
+
+- Allow updates for valttl field.
+- Fix crash in some rare cases.
+- Fix print format for int64_t 

@@ -1988,6 +1988,7 @@ redis_opt_string(DefElem *def, const char *key, char **field)
 		*field = defGetString(def);
 		return *field;
 	}
+	*field = NULL;
 	return NULL;
 }
 
@@ -4591,11 +4592,11 @@ redisExecForeignUpdate(EState *estate,
 				}
 			}
 			DEBUG((DEBUG_LEVEL, "SADD %s %s", rctx->pfxkey, member));
-			reply = redisCommand(rctx->r_ctx, "SADD %s %s",
-			                     rctx->pfxkey, member);
+
 		} else {
 			if (set_params & PARAM_VALTTL) {
-				//FIXME set EXPIREMEMBER here !!!
+				reply = redisCommand(rctx->r_ctx, "SADD %s %s",
+			                     rctx->pfxkey, member);
 				DEBUG((DEBUG_LEVEL, "PARAM_VALTTL fix goto and error path"));
 			}
 			if (set_params & PARAM_EXPIRY)
