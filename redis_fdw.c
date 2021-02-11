@@ -2828,7 +2828,7 @@ redisIterateForeignScan(ForeignScanState *node)
 				} else {
 					DEBUG((DEBUG_LEVEL, "LRANGE %s %d %ld",
 					      rctx->pfxkey, 0, n));
-					rctx->r_reply = redisCommand(ctx, "LRANGE %s %d %jd",
+					rctx->r_reply = redisCommand(ctx, "LRANGE %s %d %ld",
 					                             rctx->pfxkey, 0, n);
 					rctx->cmd = REDIS_LRANGE;
 				}
@@ -4006,7 +4006,7 @@ redisExecForeignInsert(EState *estate,
 				    rctx->pfxkey, val);
 			} else {
 				DEBUG((DEBUG_LEVEL, "SET %s %ld", rctx->pfxkey, ival));
-				reply = redisCommand(rctx->r_ctx, "SET %s %jd",
+				reply = redisCommand(rctx->r_ctx, "SET %s %ld",
 				    rctx->pfxkey, ival);
 			}
 		}
@@ -4033,7 +4033,7 @@ redisExecForeignInsert(EState *estate,
 			reply = redisCommand(rctx->r_ctx, "RPUSH %s %s", rctx->pfxkey, val);
 		} else {
 			DEBUG((DEBUG_LEVEL, "RPUSH %s %ld", rctx->pfxkey, ival));
-			reply = redisCommand(rctx->r_ctx, "RPUSH %s %jd",
+			reply = redisCommand(rctx->r_ctx, "RPUSH %s %ld",
 			                     rctx->pfxkey, ival);
 		}
 		break;
@@ -4048,7 +4048,7 @@ redisExecForeignInsert(EState *estate,
 			reply = redisCommand(rctx->r_ctx, "SADD %s %s", rctx->pfxkey, val);
 		} else {
 			DEBUG((DEBUG_LEVEL, "SADD %s %ld", rctx->pfxkey, ival));
-			reply = redisCommand(rctx->r_ctx, "SADD %s %jd",
+			reply = redisCommand(rctx->r_ctx, "SADD %s %ld",
 			                     rctx->pfxkey, ival);
 		}
 		break;
@@ -4058,11 +4058,11 @@ redisExecForeignInsert(EState *estate,
 
 		if (val) {
 			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %s", rctx->pfxkey, score, val));
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %jd %s",
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %ld %s",
 			                     rctx->pfxkey, score, val);
 		} else {
 			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %ld", rctx->pfxkey, score, ival));
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %jd %jd",
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %ld %ld",
 			                     rctx->pfxkey, score, ival);
 		}
 
@@ -4114,17 +4114,15 @@ redisExecForeignInsert(EState *estate,
 		                     rctx->pfxkey, (int)rctx->expiry);
 
 		if (expreply == NULL) {
-			redisFree(rctx->r_ctx);
 			ereport(ERROR,
 			   (errcode(ERRCODE_FDW_ERROR),
 			    errmsg("EXPIRE reply NULL")));
-		} else if (expreply->type == REDIS_REPLY_ERROR) {
-			freeReplyObject(expreply);
 			redisFree(rctx->r_ctx);
-
+		} else if (expreply->type == REDIS_REPLY_ERROR) {
 			ereport(ERROR,
 			   (errcode(ERRCODE_FDW_ERROR),
 			    errmsg("Redis EXIPIRE cmd failed: %s", expreply->str)));
+			redisFree(rctx->r_ctx);
 		}
 		freeReplyObject(expreply);
 	}
@@ -4133,26 +4131,28 @@ redisExecForeignInsert(EState *estate,
 
 		if (val) {
 			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %s %jd", rctx->pfxkey, val, rctx->valttl));
-			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %s %jd",
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %s %ld",
 		                			rctx->pfxkey, val, rctx->valttl);
 		} else {
-			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %ld %jd", rctx->pfxkey, ival, rctx->valttl));
-			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %ld %jd",
+			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %jd %jd", rctx->pfxkey, ival, rctx->valttl));
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %ld %ld",
 		                			rctx->pfxkey, ival, rctx->valttl);
 		}
 
 		if (expreply == NULL) {
-			redisFree(rctx->r_ctx);
+			
 			ereport(ERROR,
 			   (errcode(ERRCODE_FDW_ERROR),
-			    errmsg("EXPIREMEMBER reply NULL")));
-		} else if (expreply->type == REDIS_REPLY_ERROR) {
-			freeReplyObject(expreply);
+			    errmsg("EXPIREMEMBER reply NULL %d %s", rctx->r_ctx->err, rctx->r_ctx->errstr)));
+
 			redisFree(rctx->r_ctx);
+		} else if (expreply->type == REDIS_REPLY_ERROR) {
 
 			ereport(ERROR,
 			   (errcode(ERRCODE_FDW_ERROR),
 			    errmsg("Redis (KeyDB) EXPIREMEMBER cmd failed: %s", expreply->str)));
+
+				redisFree(rctx->r_ctx);
 		}
 		freeReplyObject(expreply);
 	}
@@ -4497,7 +4497,7 @@ redisExecForeignUpdate(EState *estate,
 					                     rctx->pfxkey, val);
 				} else {
 					DEBUG((DEBUG_LEVEL, "SET %s %ld", rctx->pfxkey, ival));
-					reply = redisCommand(rctx->r_ctx, "SET %s %jd",
+					reply = redisCommand(rctx->r_ctx, "SET %s %ld",
 					                     rctx->pfxkey, ival);
 				}
 			} else if (key != NULL && resjunk.key != NULL) {
@@ -4561,12 +4561,12 @@ redisExecForeignUpdate(EState *estate,
 			if (val) {
 				DEBUG((DEBUG_LEVEL, "LSET %s %ld %s",
 				                    rctx->pfxkey, resjunk.index, val));
-				reply = redisCommand(rctx->r_ctx, "LSET %s %jd %s",
+				reply = redisCommand(rctx->r_ctx, "LSET %s %ld %s",
 				    rctx->pfxkey, resjunk.index, val);
 			} else {
 				DEBUG((DEBUG_LEVEL, "LSET %s %ld %ld",
 				       rctx->pfxkey, resjunk.index, ival));
-				reply = redisCommand(rctx->r_ctx, "LSET %s %jd %jd",
+				reply = redisCommand(rctx->r_ctx, "LSET %s %ld %ld",
 				                     rctx->pfxkey, resjunk.index, ival);
 			}
 		} else {
@@ -4633,7 +4633,7 @@ redisExecForeignUpdate(EState *estate,
 					    (ERROR, "member %s does not exist", resjunk.member));
 				}
 			}
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %jd %s",
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %ld %s",
 			                     rctx->pfxkey, score, member);
 		} else {
 			if (set_params & PARAM_EXPIRY)
@@ -4874,7 +4874,7 @@ redisExecForeignDelete(EState *estate,
 #define REDIS_LIST_DEL_MAGIC ":::redis-fdw-marked-for-deletion:::"
 
 			/* rename the index into something unique */
-			reply = redisCommand(rctx->r_ctx, "LSET %s %jd %s",
+			reply = redisCommand(rctx->r_ctx, "LSET %s %ld %s",
 			    rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC);
 			if (reply->type == REDIS_REPLY_ERROR) {
 				char *errmsg;
@@ -4887,7 +4887,7 @@ redisExecForeignDelete(EState *estate,
 
 			DEBUG((DEBUG_LEVEL, "LREM %s %ld %s",
 			     rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC));
-			reply = redisCommand(rctx->r_ctx, "LREM %s %jd %s",
+			reply = redisCommand(rctx->r_ctx, "LREM %s %ld %s",
 			    rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC);
 		}
 		break;

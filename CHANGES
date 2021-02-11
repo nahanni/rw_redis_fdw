@@ -2,4 +2,8 @@
 
 - Allow updates for valttl field.
 - Fix crash in some rare cases.
-- Fix print format for int64_t 
+- Fix print format for int64_t
+
+2021-02-11 Version 1.0.3
+
+- Fix redisCommand() format string, it does not support %jd, so we are using %ld
