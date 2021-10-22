@@ -92,6 +92,12 @@ CREATE FOREIGN TABLE rft_pub(
 ) SERVER localredis
   OPTIONS (tabletype 'publish', database '1');
 
+-- KEYS
+CREATE FOREIGN TABLE rft_keys(
+	key       TEXT
+) SERVER localredis
+  OPTIONS (tabletype 'keys', database '1');
+
 
 -- ===================================================================
 -- simple insert
@@ -199,6 +205,12 @@ UPDATE rft_pub SET message = 'something' WHERE channel = 'chan';
 -- delete will fail as it is not supported for "publish"
 DELETE FROM rft_pub WHERE channel = 'chan';
 
+-- list keys
+SELECT * FROM rft_keys;
+
+-- list keys with pattern
+SELECT * FROM rft_keys WHERE key = 'rftz*';
+
 -- ===================================================================
 -- delete
 -- ===================================================================
@@ -225,6 +237,7 @@ SELECT * FROM rft_list WHERE key = 'lkey';
 
 DELETE FROM rft_set WHERE key = 'skey' AND member = 'member2';
 SELECT * FROM rft_set WHERE key = 'skey' ORDER BY member;
+SELECT * FROM rft_set WHERE key = 'skey' AND member = 'member3';
 
 DELETE FROM rft_zset WHERE key = 'zkey' AND member = 'member3';
 SELECT * FROM rft_zset WHERE key = 'zkey';
@@ -246,6 +259,10 @@ SELECT * FROM rft_list WHERE key = 'lkey';
 DELETE FROM rft_zset WHERE key = 'zkey';
 SELECT * FROM rft_zset WHERE key = 'zkey';
 
+-- list remaining keys
+
+SELECT * FROM rft_keys;
+
 DROP FOREIGN TABLE rft_str;
 DROP FOREIGN TABLE rft_hash;
 DROP FOREIGN TABLE rft_mhash;
@@ -255,3 +272,4 @@ DROP FOREIGN TABLE rft_zset;
 DROP FOREIGN TABLE rft_ttl;
 DROP FOREIGN TABLE rft_len;
 DROP FOREIGN TABLE rft_pub;
+DROP FOREIGN TABLE rft_keys;

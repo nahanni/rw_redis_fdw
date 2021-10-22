@@ -2,7 +2,7 @@
 
 This PostgreSQL extension provides a Foreign Data Wrapper for read (SELECT) and write (INSERT, UPDATE, DELETE) access to Redis databases (http://redis.io). Supported Redis data types include: string, set, hash, list, zset, and pubsub.
 
-*Note* that the output FDW module is called **redis\_fdw**, even though this repository is called rw\_redis\_fdw and not be confused with https://github.com/pg-redis-fdw/redis_fdw (which was used as a basis for the table schema), to enable existing users to migrate to this repo.  Instructions hereon-in refer to this repository only.
+*Note* that the output FDW module is called **redis\_fdw**, even though this repository is called rw\_redis\_fdw and not be confused with https://github.com/pg-redis-fdw/redis_fdw (which was used as a basis for the table schema but with very different code), to enable existing users to migrate to this repo.  Instructions hereon-in refer to this repository only.
 
 redis\_fdw *(nahanni/rw\_redis\_fdw)* was written by Leon Dang, sponsored by Nahanni Systems Inc.
 
@@ -10,7 +10,7 @@ This project is currently work in progress and may have experience significant c
 
 **PostgreSQL version compatibility**
 
-Currently tested against PostgreSQL 9.4 and 9.5. Other versions might work but unconfirmed.
+Currently tested against PostgreSQL 9.4+, 10, 11, 12, 14. Other versions might work but unconfirmed.
 
 ## Building
 ### Dependencies:
@@ -24,6 +24,22 @@ Currently tested against PostgreSQL 9.4 and 9.5. Other versions might work but u
   sudo PATH=<pgsql_prefix>/bin:$PATH make install
 ```
 where pgsql\_prefix is where you've installed PostgreSQL to, e.g. /usr/local/postgresql/9.4.0
+
+### Build RPM
+
+For Centos 7 you should add Centos SCLO repo and install required packages:
+
+```shell
+yum -y install centos-release-scl-rh
+yum-config-manager --enable rhel-server-rhscl-7-rpms
+yum -y install hiredis-devel postgresql11-devel llvm-toolset-7-clang
+```
+
+And build RPM by command:
+
+```shell
+rpmbuild -tb rw_redis_fdw-<tag>.tar.gz
+```
 
 ## Options
 
@@ -101,6 +117,7 @@ Any extraneous columns defined are ignored and untested.
 
 - **ttl** - key-expiry. Inspect or set/remove the expiry from a key.
 - **len** - key-tabletype-len. Retrieve the number of items in a key or the entire database.
+- **keys** - retreive all keys in the database
 
 *key* must be either defined as a column or a table option, but not both. 
 
@@ -225,7 +242,7 @@ Get or set the time to live (in seconds) of a key.
   CREATE FOREIGN TABLE rft_pub(
       channel   TEXT,
       message   TEXT,
-      len       INT,
+      len       INT
   ) SERVER localredis
     OPTIONS (tabletype 'publish');
 ```
@@ -244,6 +261,19 @@ Retrieve the length of a key or the database (if SELECT does not have WHERE key 
       expiry    INT
   ) SERVER localredis
     OPTIONS (tabletype 'len');
+```
+
+### Keys
+
+**Read-only**
+
+Retrieve all keys for the database. Use with special care and only on small key-spaces since it requires fetching all keys from redis which returns all keys as a single array which can hurt memory use significantly.
+
+```
+  CREATE FOREIGN TABLE rft_keys(
+      key       TEXT
+  ) SERVER localredis
+    OPTIONS (tabletype 'keys');
 ```
 
 ## Usage
@@ -321,4 +351,4 @@ If you encounter an issue with the module, here are some ways that can assist in
 
 ## Authors
 
-Leon Dang http://nahannisys.com
+Leon Dang
