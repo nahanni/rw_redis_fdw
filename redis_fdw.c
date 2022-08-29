@@ -2449,7 +2449,7 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	   "\tkey: %s\n"
 	   "\tkeyprefix: %s\n"
 	   "\tfield: %s, s_value: %s, table_type-param: %s\n"
-	   "\ti_min: %ld, i_max: %ld\n"
+	   "\ti_min: %lld, i_max: %lld\n"
 	   "\ti_min_op: %d, i_max_op: %d\n",
 	    rctx->host, rctx->port,
 	    rctx->key,
@@ -2708,7 +2708,7 @@ redisIterateForeignScan(ForeignScanState *node)
 					     "UPDATE/DELETE only allows INDEX \"=\" operator");
 				}
 
-				DEBUG((DEBUG_LEVEL, "  setting index (%ld)", rctx->where_conds.max));
+				DEBUG((DEBUG_LEVEL, "  setting index (%lld)", rctx->where_conds.max));
 				index = rctx->where_conds.max;
 			}
 
@@ -2806,9 +2806,9 @@ redisIterateForeignScan(ForeignScanState *node)
 				rctx->rowcount = 0;
 				rctx->rowsdone = 1;
 			} else if (rctx->where_conds.max >= 0) {
-				DEBUG((DEBUG_LEVEL, "LINDEX %s %ld", rctx->pfxkey,
+				DEBUG((DEBUG_LEVEL, "LINDEX %s %lld", rctx->pfxkey,
 				       rctx->where_conds.max));
-				rctx->r_reply = redisCommand(ctx, "LINDEX %s %ld",
+				rctx->r_reply = redisCommand(ctx, "LINDEX %s %lld",
 				                         rctx->pfxkey, rctx->where_conds.max);
 				rctx->cmd = REDIS_LINDEX;
 			} else {
@@ -2826,9 +2826,9 @@ redisIterateForeignScan(ForeignScanState *node)
 					rctx->rowcount = 0;
 					rctx->rowsdone = 1;
 				} else {
-					DEBUG((DEBUG_LEVEL, "LRANGE %s %d %ld",
+					DEBUG((DEBUG_LEVEL, "LRANGE %s %d %lld",
 					      rctx->pfxkey, 0, n));
-					rctx->r_reply = redisCommand(ctx, "LRANGE %s %d %ld",
+					rctx->r_reply = redisCommand(ctx, "LRANGE %s %d %lld",
 					                             rctx->pfxkey, 0, n);
 					rctx->cmd = REDIS_LRANGE;
 				}
@@ -2879,7 +2879,7 @@ redisIterateForeignScan(ForeignScanState *node)
 
 				if (rctx->where_conds.max >= rctx->where_conds.min) {
 					DEBUG((DEBUG_LEVEL,
-					      "ZRANGEBYSCORE %s %ld %ld WITHSCORES",
+					      "ZRANGEBYSCORE %s %lld %lld WITHSCORES",
 					       rctx->pfxkey,
 					       rctx->where_conds.min, rctx->where_conds.max));
 					rctx->r_reply = redisCommand(ctx,
@@ -2888,10 +2888,10 @@ redisIterateForeignScan(ForeignScanState *node)
 					         rctx->where_conds.min, rctx->where_conds.max);
 				} else {
 					DEBUG((DEBUG_LEVEL,
-					      "ZRANGEBYSCORE %s %ld +inf WITHSCORES",
+					      "ZRANGEBYSCORE %s %lld +inf WITHSCORES",
 					       rctx->pfxkey, rctx->where_conds.min));
 					rctx->r_reply = redisCommand(ctx,
-					         "ZRANGEBYSCORE %s %ld +inf WITHSCORES",
+					         "ZRANGEBYSCORE %s %lld +inf WITHSCORES",
 					         rctx->pfxkey, rctx->where_conds.min);
 				}
 				rctx->cmd = REDIS_ZRANGEBYSCORE;
@@ -2905,11 +2905,11 @@ redisIterateForeignScan(ForeignScanState *node)
 				else if (rctx->where_conds.max_op == ROP_EQ)
 					rctx->where_conds.min = rctx->where_conds.max;
 
-				DEBUG((DEBUG_LEVEL, "ZRANGE %s %ld %ld WITHSCORES",
+				DEBUG((DEBUG_LEVEL, "ZRANGE %s %lld %lld WITHSCORES",
 				       rctx->pfxkey,
 				       rctx->where_conds.min, rctx->where_conds.max));
 				rctx->r_reply = redisCommand(ctx,
-				                "ZRANGE %s %ld %ld WITHSCORES", rctx->pfxkey,
+				                "ZRANGE %s %lld %lld WITHSCORES", rctx->pfxkey,
 				                rctx->where_conds.min, rctx->where_conds.max);
 				rctx->cmd = REDIS_ZRANGE;
 			}
@@ -3197,7 +3197,7 @@ fill_slot:
 			value = s_value;
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%jd", i_value);
+			snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
 			value = pstrdup(vbuf);
 			break;
 		case VAR_MEMBER:
@@ -3212,20 +3212,20 @@ fill_slot:
 		case VAR_EXPIRY:
 		    DEBUG((DEBUG_LEVEL, "VAR_EXPIRY CASE"));
 			if (rctx->cmd == REDIS_TTL) {
-				snprintf(vbuf, sizeof(vbuf), "%jd", i_value);
+				snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
 				value = pstrdup(vbuf);
 			} else {
-				snprintf(vbuf, sizeof(vbuf), "%jd", rctx->expiry);
+				snprintf(vbuf, sizeof(vbuf), "%lld", rctx->expiry);
 				value = pstrdup(vbuf);
 			}
 			break;
 		case VAR_VALTTL:
 		    DEBUG((DEBUG_LEVEL, "VAR_VALTTL CASE"));
 			if (rctx->cmd == REDIS_TTL) {
-				snprintf(vbuf, sizeof(vbuf), "%jd", i_value);
+				snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
 				value = pstrdup(vbuf);
 			} else {
-				snprintf(vbuf, sizeof(vbuf), "%jd", rctx->valttl);
+				snprintf(vbuf, sizeof(vbuf), "%lld", rctx->valttl);
 				value = pstrdup(vbuf);
 			}
 			break;
@@ -3235,14 +3235,14 @@ fill_slot:
 				if (!(rctx->where_flags & PARAM_INDEX)) {
 					value = NULL;
 				} else {
-					snprintf(vbuf, sizeof(vbuf), "%jd", index);
+					snprintf(vbuf, sizeof(vbuf), "%lld", index);
 					value = pstrdup(vbuf);
 				}
 			} else if (rctx->table_type == PG_REDIS_LIST) {
-				snprintf(vbuf, sizeof(vbuf), "%jd", rctx->where_conds.max);
+				snprintf(vbuf, sizeof(vbuf), "%lld", rctx->where_conds.max);
 				value = pstrdup(vbuf);
 			} else if ( rctx->table_type == PG_REDIS_ZSET) {
-				snprintf(vbuf, sizeof(vbuf), "%jd", index);
+				snprintf(vbuf, sizeof(vbuf), "%lld", index);
 				value = pstrdup(vbuf);
 			} else {
 				snprintf(vbuf, sizeof(vbuf), "%d", 0);
@@ -3254,7 +3254,7 @@ fill_slot:
 				if (s_score != NULL)
 					value = pstrdup(s_score);
 				else  {
-					snprintf(vbuf, sizeof(vbuf), "%jd", score);
+					snprintf(vbuf, sizeof(vbuf), "%lld", score);
 					value = pstrdup(vbuf);
 				}
 			} else {
@@ -3263,7 +3263,7 @@ fill_slot:
 			}
 			break;
 		case VAR_LEN:
-			snprintf(vbuf, sizeof(vbuf), "%jd", i_value);
+			snprintf(vbuf, sizeof(vbuf), "%lld", i_value);
 			value = pstrdup(vbuf);
 			break;
 		case VAR_TABLE_TYPE:
@@ -3857,6 +3857,7 @@ redisExecForeignInsert(EState *estate,
 	redisReply *expreply = NULL;
 	char vbuf[32];
 
+	bool expiry_already_set = false;
 	bool newkey = false;
 	char *str = NULL;
 	char *val = NULL;
@@ -3988,25 +3989,25 @@ redisExecForeignInsert(EState *estate,
 		rctx->cmd = REDIS_SET;
 		if (rctx->expiry > 0) {
 			if (val) {
-				DEBUG((DEBUG_LEVEL, "SET %s %s EX %ld",
+				DEBUG((DEBUG_LEVEL, "SET %s %s EX %lld",
 				       rctx->pfxkey, val, rctx->expiry));
-				reply = redisCommand(rctx->r_ctx, "SET %s %s EX %d",
-				    rctx->pfxkey, val, (int)rctx->expiry);
+				reply = redisCommand(rctx->r_ctx, "SET %s %s EX %lld",
+				    rctx->pfxkey, val, (long long)rctx->expiry);
 			} else {
-				DEBUG((DEBUG_LEVEL, "SET %s %ld EX %ld",
+				DEBUG((DEBUG_LEVEL, "SET %s %lld EX %lld",
 				      rctx->pfxkey, ival, rctx->expiry));
-				reply = redisCommand(rctx->r_ctx, "SET %s %ld EX %d",
-				    rctx->pfxkey, ival, (int)rctx->expiry);
+				reply = redisCommand(rctx->r_ctx, "SET %s %lld EX %lld",
+				    rctx->pfxkey, ival, (long long)rctx->expiry);
 			}
-			rctx->expiry = 0;
+			expiry_already_set = true;
 		} else {
 			if (val) {
 				DEBUG((DEBUG_LEVEL, "SET %s %s", rctx->pfxkey, val));
 				reply = redisCommand(rctx->r_ctx, "SET %s %s",
 				    rctx->pfxkey, val);
 			} else {
-				DEBUG((DEBUG_LEVEL, "SET %s %ld", rctx->pfxkey, ival));
-				reply = redisCommand(rctx->r_ctx, "SET %s %ld",
+				DEBUG((DEBUG_LEVEL, "SET %s %lld", rctx->pfxkey, ival));
+				reply = redisCommand(rctx->r_ctx, "SET %s %lld",
 				    rctx->pfxkey, ival);
 			}
 		}
@@ -4032,8 +4033,8 @@ redisExecForeignInsert(EState *estate,
 			DEBUG((DEBUG_LEVEL, "RPUSH %s %s", rctx->pfxkey, val));
 			reply = redisCommand(rctx->r_ctx, "RPUSH %s %s", rctx->pfxkey, val);
 		} else {
-			DEBUG((DEBUG_LEVEL, "RPUSH %s %ld", rctx->pfxkey, ival));
-			reply = redisCommand(rctx->r_ctx, "RPUSH %s %ld",
+			DEBUG((DEBUG_LEVEL, "RPUSH %s %lld", rctx->pfxkey, ival));
+			reply = redisCommand(rctx->r_ctx, "RPUSH %s %lld",
 			                     rctx->pfxkey, ival);
 		}
 		break;
@@ -4047,8 +4048,8 @@ redisExecForeignInsert(EState *estate,
 			DEBUG((DEBUG_LEVEL, "SADD %s %s", rctx->pfxkey, val));
 			reply = redisCommand(rctx->r_ctx, "SADD %s %s", rctx->pfxkey, val);
 		} else {
-			DEBUG((DEBUG_LEVEL, "SADD %s %ld", rctx->pfxkey, ival));
-			reply = redisCommand(rctx->r_ctx, "SADD %s %ld",
+			DEBUG((DEBUG_LEVEL, "SADD %s %lld", rctx->pfxkey, ival));
+			reply = redisCommand(rctx->r_ctx, "SADD %s %lld",
 			                     rctx->pfxkey, ival);
 		}
 		break;
@@ -4057,12 +4058,12 @@ redisExecForeignInsert(EState *estate,
 		rctx->cmd = REDIS_ZADD;
 
 		if (val) {
-			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %s", rctx->pfxkey, score, val));
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %ld %s",
+			DEBUG((DEBUG_LEVEL, "ZADD %s %lld %s", rctx->pfxkey, score, val));
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %lld %s",
 			                     rctx->pfxkey, score, val);
 		} else {
-			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %ld", rctx->pfxkey, score, ival));
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %ld %ld",
+			DEBUG((DEBUG_LEVEL, "ZADD %s %lld %lld", rctx->pfxkey, score, ival));
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %lld %lld",
 			                     rctx->pfxkey, score, ival);
 		}
 
@@ -4071,9 +4072,9 @@ redisExecForeignInsert(EState *estate,
 		/* INSERT (key, expiry) */
 		if (rctx->expiry > 0) {
 			rctx->cmd = REDIS_EXPIRE;
-			DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-		                     rctx->pfxkey, (int)rctx->expiry);
+			DEBUG((DEBUG_LEVEL, "EXPIRE %s %lld", rctx->pfxkey, rctx->expiry));
+			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %lld",
+		                     rctx->pfxkey, (long long)rctx->expiry);
 		} else {
 			/* remove expiry */
 			rctx->cmd = REDIS_PERSIST;
@@ -4108,10 +4109,10 @@ redisExecForeignInsert(EState *estate,
 
 	freeReplyObject(reply);
 
-	if (rctx->expiry > 0) {
-		DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-		expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-		                     rctx->pfxkey, (int)rctx->expiry);
+	if (rctx->expiry > 0 && !expiry_already_set) {
+		DEBUG((DEBUG_LEVEL, "EXPIRE %s %lld", rctx->pfxkey, rctx->expiry));
+		expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %lld",
+		                     rctx->pfxkey, (long long)rctx->expiry);
 
 		if (expreply == NULL) {
 			ereport(ERROR,
@@ -4130,12 +4131,12 @@ redisExecForeignInsert(EState *estate,
 	if (rctx->valttl > 0 && rctx->table_type == PG_REDIS_SET) {
 
 		if (val) {
-			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %s %jd", rctx->pfxkey, val, rctx->valttl));
-			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %s %ld",
+			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %s %lld", rctx->pfxkey, val, rctx->valttl));
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %s %lld",
 		                			rctx->pfxkey, val, rctx->valttl);
 		} else {
-			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %jd %jd", rctx->pfxkey, ival, rctx->valttl));
-			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %ld %ld",
+			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %lld %lld", rctx->pfxkey, ival, rctx->valttl));
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %lld %lld",
 		                			rctx->pfxkey, ival, rctx->valttl);
 		}
 
@@ -4190,25 +4191,25 @@ redisExecForeignInsert(EState *estate,
 		case VAR_SARRAY_VALUE:
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%jd", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
-			snprintf(vbuf, sizeof(vbuf), "%jd", rctx->expiry);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->expiry);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_VALTTL:
-			snprintf(vbuf, sizeof(vbuf), "%jd", rctx->valttl);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->valttl);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%jd", rctx->where_conds.min);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->where_conds.min);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCORE:
-			snprintf(vbuf, sizeof(vbuf), "%jd", score);
+			snprintf(vbuf, sizeof(vbuf), "%lld", score);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCARD:
@@ -4217,7 +4218,7 @@ redisExecForeignInsert(EState *estate,
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_LEN:
-			snprintf(vbuf, sizeof(vbuf), "%jd", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
 			retval = pstrdup(vbuf);
 			break;
 		default:
@@ -4285,7 +4286,7 @@ redis_get_resjunks(struct redis_fdw_ctx *rctx, TupleTableSlot *planSlot,
 		               rctx->rtable.columns[rctx->rtable.index-1].typoutput, 
 		               datum));
 			rj->index = atoll(s);
-			DEBUG((DEBUG_LEVEL, "update/delete WHERE index = %ld [%s]",
+			DEBUG((DEBUG_LEVEL, "update/delete WHERE index = %lld [%s]",
 			      rj->index, s));
 		}
 	}
@@ -4471,22 +4472,22 @@ redisExecForeignUpdate(EState *estate,
 		if (set_params & PARAM_EXPIRY) {
 			if (set_params & PARAM_VALUE) {
 				if (val) {
-					DEBUG((DEBUG_LEVEL, "SET %s %s EX %ld",
+					DEBUG((DEBUG_LEVEL, "SET %s %s EX %lld",
 					       rctx->pfxkey, val, rctx->expiry));
-					reply = redisCommand(rctx->r_ctx, "SET %s %s EX %d",
-					                     rctx->pfxkey, val, (int)rctx->expiry);
+					reply = redisCommand(rctx->r_ctx, "SET %s %s EX %lld",
+					                     rctx->pfxkey, val, (long long)rctx->expiry);
 				} else {
-					DEBUG((DEBUG_LEVEL, "SET %s %ld EX %ld",
+					DEBUG((DEBUG_LEVEL, "SET %s %lld EX %lld",
 					      rctx->pfxkey, ival, rctx->expiry));
-					reply = redisCommand(rctx->r_ctx, "SET %s %ld EX %d",
-					                    rctx->pfxkey, ival, (int)rctx->expiry);
+					reply = redisCommand(rctx->r_ctx, "SET %s %lld EX %lld",
+					                    rctx->pfxkey, ival, (long long)rctx->expiry);
 				}
 			} else {
 				/* only updating expiry for key */
-				DEBUG((DEBUG_LEVEL, "(SET) EXPIRE %s %ld",
+				DEBUG((DEBUG_LEVEL, "(SET) EXPIRE %s %lld",
 				       rctx->pfxkey, rctx->expiry));
-				reply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-				                     rctx->pfxkey, (int)rctx->expiry);
+				reply = redisCommand(rctx->r_ctx, "EXPIRE %s %lld",
+				                     rctx->pfxkey, (long long)rctx->expiry);
 			}
 		} else {
 			if (set_params & PARAM_VALUE) {
@@ -4496,8 +4497,8 @@ redisExecForeignUpdate(EState *estate,
 					reply = redisCommand(rctx->r_ctx, "SET %s %s",
 					                     rctx->pfxkey, val);
 				} else {
-					DEBUG((DEBUG_LEVEL, "SET %s %ld", rctx->pfxkey, ival));
-					reply = redisCommand(rctx->r_ctx, "SET %s %ld",
+					DEBUG((DEBUG_LEVEL, "SET %s %lld", rctx->pfxkey, ival));
+					reply = redisCommand(rctx->r_ctx, "SET %s %lld",
 					                     rctx->pfxkey, ival);
 				}
 			} else if (key != NULL && resjunk.key != NULL) {
@@ -4559,14 +4560,14 @@ redisExecForeignUpdate(EState *estate,
 		if ((set_params & PARAM_VALUE) &&
 		    ((resjunk.hasval & PARAM_INDEX) || (set_params & PARAM_INDEX))) {
 			if (val) {
-				DEBUG((DEBUG_LEVEL, "LSET %s %ld %s",
+				DEBUG((DEBUG_LEVEL, "LSET %s %lld %s",
 				                    rctx->pfxkey, resjunk.index, val));
-				reply = redisCommand(rctx->r_ctx, "LSET %s %ld %s",
+				reply = redisCommand(rctx->r_ctx, "LSET %s %lld %s",
 				    rctx->pfxkey, resjunk.index, val);
 			} else {
-				DEBUG((DEBUG_LEVEL, "LSET %s %ld %ld",
+				DEBUG((DEBUG_LEVEL, "LSET %s %lld %lld",
 				       rctx->pfxkey, resjunk.index, ival));
-				reply = redisCommand(rctx->r_ctx, "LSET %s %ld %ld",
+				reply = redisCommand(rctx->r_ctx, "LSET %s %lld %lld",
 				                     rctx->pfxkey, resjunk.index, ival);
 			}
 		} else {
@@ -4621,7 +4622,7 @@ redisExecForeignUpdate(EState *estate,
 		}
 
 		if (set_params & PARAM_MEMBER) {
-			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %s", rctx->pfxkey, score, member));
+			DEBUG((DEBUG_LEVEL, "ZADD %s %lld %s", rctx->pfxkey, score, member));
 			if (resjunk.hasval & PARAM_MEMBER && strcmp(member, resjunk.member) != 0) {
 				/* remove old member */
 				DEBUG((DEBUG_LEVEL, "ZREM %s %s",
@@ -4646,9 +4647,9 @@ redisExecForeignUpdate(EState *estate,
 	case PG_REDIS_TTL:
 		/* UPDATE SET expiry = x WHERE key = x */
 		if (set_params & PARAM_EXPIRY) {
-			DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-		                     rctx->pfxkey, (int)rctx->expiry);
+			DEBUG((DEBUG_LEVEL, "EXPIRE %s %lld", rctx->pfxkey, rctx->expiry));
+			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %lld",
+		                     rctx->pfxkey, (long long)rctx->expiry);
 		} else {
 			/* remove expiry */
 			DEBUG((DEBUG_LEVEL, "PERSIST %s", rctx->pfxkey));
@@ -4675,9 +4676,9 @@ redisExecForeignUpdate(EState *estate,
 do_expiry:
 	if (set_params & PARAM_EXPIRY) {
 		if (rctx->expiry > 0) {
-			DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-			expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-			                     rctx->key, (int)rctx->expiry);
+			DEBUG((DEBUG_LEVEL, "EXPIRE %s %lld", rctx->pfxkey, rctx->expiry));
+			expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %lld",
+			                     rctx->key, (long long)rctx->expiry);
 		} else {
 			DEBUG((DEBUG_LEVEL, "PERSIST %s", rctx->pfxkey));
 			expreply = redisCommand(rctx->r_ctx, "PERSIST %s", rctx->key);
@@ -4729,7 +4730,7 @@ do_expiry:
 		case VAR_SARRAY_VALUE:
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%jd", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_MEMBER:
@@ -4738,19 +4739,19 @@ do_expiry:
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
-			snprintf(vbuf, sizeof(vbuf), "%jd", rctx->expiry);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->expiry);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_VALTTL:
-			snprintf(vbuf, sizeof(vbuf), "%jd", rctx->valttl);
+			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->valttl);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%jd", resjunk.index);
+			snprintf(vbuf, sizeof(vbuf), "%lld", resjunk.index);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCORE:
-			snprintf(vbuf, sizeof(vbuf), "%jd", score);
+			snprintf(vbuf, sizeof(vbuf), "%lld", score);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCARD:
@@ -4885,9 +4886,9 @@ redisExecForeignDelete(EState *estate,
 			}
 			freeReplyObject(reply);
 
-			DEBUG((DEBUG_LEVEL, "LREM %s %ld %s",
+			DEBUG((DEBUG_LEVEL, "LREM %s %lld %s",
 			     rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC));
-			reply = redisCommand(rctx->r_ctx, "LREM %s %ld %s",
+			reply = redisCommand(rctx->r_ctx, "LREM %s %lld %s",
 			    rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC);
 		}
 		break;
@@ -4981,7 +4982,7 @@ redisExecForeignDelete(EState *estate,
 		case VAR_VALTTL:
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%jd", resjunk.index);
+			snprintf(vbuf, sizeof(vbuf), "%lld", resjunk.index);
 			retval = vbuf;
 			break;
 		case VAR_SCORE:

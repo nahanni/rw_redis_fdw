@@ -7,3 +7,7 @@
 2021-02-11 Version 1.0.3
 
 - Fix redisCommand() format string, it does not support %jd, so we are using %ld
+
+2022-08-29 Version 1.0.4
+
+- Removed %jd from all format strings, using %lld everywhere for 64 bit integers
