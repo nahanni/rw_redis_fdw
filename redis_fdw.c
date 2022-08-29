@@ -566,7 +566,7 @@ dump_reply(redisReply *r, int level)
 	prefix[i] = '\0';
 
 	DEBUG((DEBUG_LEVEL,
-	    "  Reply: %s%s len(%u) str(%s) int(%" PRId64 ") elements(%lu)",
+	    "  Reply: %s%s len(%u) str(%s) int(%lld) elements(%lu)",
 	    prefix, reply_type_str(r->type), (unsigned)r->len,
 	    r->str ? r->str : "", r->integer, r->elements));
 	if (r->elements > 0) {
@@ -739,9 +739,9 @@ redisarray_to_psqlarray(redisReply *reply, char **fields, char **values)
 
 		case REDIS_REPLY_INTEGER:
 			if (fields != NULL && (i & 0x01) == 0)
-				appendStringInfo(res_f, "%" PRId64 "", elem->integer);
+				appendStringInfo(res_f, "%lld", elem->integer);
 			else
-				appendStringInfo(res_v, "%" PRId64 "", elem->integer);
+				appendStringInfo(res_v, "%lld", elem->integer);
 			break;
 
 		case REDIS_REPLY_NIL:
@@ -2268,7 +2268,7 @@ redisGetForeignRelSize(PlannerInfo *root,
 	if (reply != NULL) {
 		Assert(reply->type == REDIS_REPLY_INTEGER);
 		baserel->rows = reply->integer;
-		DEBUG((DEBUG_LEVEL, "number of items for key: %" PRId64 "", reply->integer));
+		DEBUG((DEBUG_LEVEL, "number of items for key: %lld", reply->integer));
 		freeReplyObject(reply);
 	}
 
@@ -4931,7 +4931,7 @@ redisExecForeignDelete(EState *estate,
 	}
 
 	if (reply->type == REDIS_REPLY_INTEGER) {
-		DEBUG((DEBUG_LEVEL, "Redis deletion returned %" PRId64 "", reply->integer));
+		DEBUG((DEBUG_LEVEL, "Redis deletion returned %lld", reply->integer));
 		if (reply->integer == 0) {
 			resjunk.key = NULL;
 		}
