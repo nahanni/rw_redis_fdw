@@ -4191,25 +4191,25 @@ redisExecForeignInsert(EState *estate,
 		case VAR_SARRAY_VALUE:
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", (long long) ival);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
-			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->expiry);
+			snprintf(vbuf, sizeof(vbuf), "%lld", (long long) rctx->expiry);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_VALTTL:
-			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->valttl);
+			snprintf(vbuf, sizeof(vbuf), "%lld", (long long) rctx->valttl);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%lld", rctx->where_conds.min);
+			snprintf(vbuf, sizeof(vbuf), "%lld", (long long) rctx->where_conds.min);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCORE:
-			snprintf(vbuf, sizeof(vbuf), "%lld", score);
+			snprintf(vbuf, sizeof(vbuf), "%lld", (long long) score);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCARD:
@@ -4218,7 +4218,7 @@ redisExecForeignInsert(EState *estate,
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_LEN:
-			snprintf(vbuf, sizeof(vbuf), "%lld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%lld", (long long) ival);
 			retval = pstrdup(vbuf);
 			break;
 		default:
