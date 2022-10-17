@@ -180,9 +180,16 @@ static void redisReScanForeignScan(ForeignScanState *node);
 static void redisEndForeignScan(ForeignScanState *node);
 
 #ifdef WRITE_API
-static void redisAddForeignUpdateTargets(Query *parsetree,
-        RangeTblEntry *target_rte,
-        Relation target_relation);
+#if PG_VERSION_NUM < 140000
+	static void redisAddForeignUpdateTargets(Query *parsetree,
+		RangeTblEntry *target_rte,
+		Relation target_relation);
+#else
+	static void redisAddForeignUpdateTargets(PlannerInfo *root, 
+		Index rtindex,
+		RangeTblEntry *target_rte,
+		Relation target_relation);
+#endif
 
 static List *redisPlanForeignModify(PlannerInfo *root,
         ModifyTable *plan,
@@ -3341,9 +3348,15 @@ redisEndForeignScan(ForeignScanState *node)
  *		Add resjunk column(s) needed for update/delete on a foreign table
  */
 static void
-redisAddForeignUpdateTargets(Query *parsetree,
-							 RangeTblEntry *target_rte,
-							 Relation target_relation)
+redisAddForeignUpdateTargets(
+	#if PG_VERSION_NUM < 140000
+		Query *parsetree,
+	#else
+		PlannerInfo *root,
+		Index rtindex,
+	#endif
+		RangeTblEntry *target_rte,
+		Relation target_relation)
 {
 	Oid relid = RelationGetRelid(target_relation);
 	TupleDesc tupdesc = target_relation->rd_att;
@@ -3407,8 +3420,7 @@ redisAddForeignUpdateTargets(Query *parsetree,
 		Form_pg_attribute att = &tupdesc->attrs[i];
 #endif
 		AttrNumber attrno = att->attnum;
-		Var *var;
-		TargetEntry *tle;
+		Var *var;		
 		char *colname;
 		int   colkey;
 		bool  skip;
@@ -3484,6 +3496,8 @@ redisAddForeignUpdateTargets(Query *parsetree,
 		if (skip)
 			continue;
 
+#if PG_VERSION_NUM < 140000		
+		TargetEntry *tle;
 		/* make a Var representing the desired value */
 		var = makeVar(parsetree->resultRelation,
 			attrno,
@@ -3498,6 +3512,18 @@ redisAddForeignUpdateTargets(Query *parsetree,
 			pstrdup(colname),
 			true);
 		parsetree->targetList = lappend(parsetree->targetList, tle);
+#else
+		/* Make a Var representing the desired value */
+		var = makeVar(
+			rtindex,
+			attrno,
+			att->atttypid,
+			att->atttypmod,
+			att->attcollation,
+			0);
+
+		add_row_identity_var(root, var, rtindex, NameStr(att->attname));
+#endif
 	}
 }
 
