@@ -3821,7 +3821,11 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	/* get resjunk attribute numbers */
 	if (operation == CMD_UPDATE || operation == CMD_DELETE) {
 		/* Find the ctid resjunk column in the subplan's result */
+	#if PG_VERSION_NUM < 140000
 		Plan *subplan = mtstate->mt_plans[subplan_index]->plan;
+	#else
+		Plan *subplan = outerPlanState(mtstate)->plan;
+	#endif
 
 		rctx->key_attno = ExecFindJunkAttributeInTlist(subplan->targetlist,
 		                                               "key");
