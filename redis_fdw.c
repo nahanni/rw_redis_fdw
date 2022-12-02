@@ -3362,6 +3362,9 @@ redisAddForeignUpdateTargets(
 		RangeTblEntry *target_rte,
 		Relation target_relation)
 {
+	#if PG_VERSION_NUM < 140000
+  	        TargetEntry *tle;
+	#endif
 	Oid relid = RelationGetRelid(target_relation);
 	TupleDesc tupdesc = target_relation->rd_att;
 	int i;
@@ -3501,7 +3504,7 @@ redisAddForeignUpdateTargets(
 			continue;
 
 #if PG_VERSION_NUM < 140000		
-		TargetEntry *tle;
+		/*TargetEntry *tle;*/
 		/* make a Var representing the desired value */
 		var = makeVar(parsetree->resultRelation,
 			attrno,
