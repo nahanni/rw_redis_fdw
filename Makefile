@@ -3,7 +3,7 @@ MODULE_big = redis_fdw
 OBJS = redis_fdw.o
 
 EXTENSION = redis_fdw
-DATA = redis_fdw--1.0.4.sql redis_fdw--1.0.3--1.0.4.sql
+DATA = redis_fdw--1.0.4.sql redis_fdw--1.0.3--1.0.4.sql redis_fdw--1.0.5.sql
 
 SHLIB_LINK += -lhiredis
 
