@@ -1,4 +1,4 @@
-%define redis_fdw_ver   1.0.5
+%define redis_fdw_ver   1.0.6
 %define postgresql_ver  11
 
 Summary:        Redis FDW for PostgreSQL %{postgresql_ver}
