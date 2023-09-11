@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 #include <hiredis/hiredis.h>
 
@@ -68,6 +69,10 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+
+#if PG_VERSION_NUM >= 140000
+#include "optimizer/appendinfo.h"
+#endif 
 
 #if PG_VERSION_NUM < 120000
 #include "optimizer/var.h"
@@ -123,12 +128,20 @@ PG_MODULE_MAGIC;
 
 #define DEBUG_LEVEL INFO
 
+
+/* Possible crashes if you call elog at the end of the macro. 
+ * Often you want to print reply fields with ERR_CLEANUP, 
+ * but reply was set to NULL early in this macro :-(
+ * For example:
+ * 			    ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
+ *				    (ERROR, "redis error: %s", rctx->r_reply->str));
+ */
 #define ERR_CLEANUP(reply,conn,eparams)	do { 			\
+ 		elog eparams; 									\
 		if ((reply) != NULL) freeReplyObject(reply); 	\
 		if ((conn) != NULL) redisFree(conn);			\
 		reply = NULL; 									\
 		conn = NULL; 									\
-		elog eparams; 									\
 	} while (0)
 
 Datum redis_fdw_handler(PG_FUNCTION_ARGS);
@@ -171,9 +184,16 @@ static void redisReScanForeignScan(ForeignScanState *node);
 static void redisEndForeignScan(ForeignScanState *node);
 
 #ifdef WRITE_API
-static void redisAddForeignUpdateTargets(Query *parsetree,
-        RangeTblEntry *target_rte,
-        Relation target_relation);
+#if PG_VERSION_NUM < 140000
+	static void redisAddForeignUpdateTargets(Query *parsetree,
+		RangeTblEntry *target_rte,
+		Relation target_relation);
+#else
+	static void redisAddForeignUpdateTargets(PlannerInfo *root, 
+		Index rtindex,
+		RangeTblEntry *target_rte,
+		Relation target_relation);
+#endif
 
 static List *redisPlanForeignModify(PlannerInfo *root,
         ModifyTable *plan,
@@ -296,6 +316,7 @@ enum redis_data_type {
 #define PARAM_TABLE_TYPE   0x0200
 #define PARAM_CHANNEL      0x0400
 #define PARAM_MESSAGE      0x0800
+#define PARAM_VALTTL    0x1000
 
 /*
  * column names/ids that this module accepts
@@ -310,6 +331,7 @@ enum var_field {
 	VAR_MEMBER,
 	VAR_MEMBERS,
 	VAR_EXPIRY,
+    VAR_VALTTL,
 	VAR_INDEX,
 	VAR_SCORE,
 	VAR_SZ_CARD,
@@ -331,6 +353,7 @@ static const char *FIELD_NAMES[] = {
 	[VAR_MEMBER]       = "member",
 	[VAR_MEMBERS]      = "members",
 	[VAR_EXPIRY]       = "expiry",
+	[VAR_VALTTL]       = "valttl",
 	[VAR_INDEX]        = "index",
 	[VAR_SCORE]        = "score",
 	[VAR_SZ_CARD]      = "szcard",
@@ -430,6 +453,7 @@ struct redis_table {
 	int member;
 	int members;         /* [] text */
 	int expiry;
+	int valttl;
 	int index;
 	int score;
 	int szcard;          /* scard or zcard */
@@ -482,6 +506,7 @@ struct redis_fdw_ctx {
 
 	struct where_conds where_conds;
 	int64_t expiry;               /* expiry parameter */
+	int64_t valttl;
 
 	unsigned long rowcount;       /* rows returned by redis */
 	unsigned long rowsdone;       /* rows already read from redis */
@@ -1350,7 +1375,11 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 			DefElem *def = (DefElem *)lfirst(option);
 
 			if (strcmp(def->defname, OPT_REDIS) == 0) {
+#if PG_VERSION_NUM < 150000
 				colname = ((Value *)(def->arg))->val.str;
+#else
+				colname = ((String *)(def->arg))->sval;
+#endif
 
 				DEBUG((DEBUG_LEVEL, "table %s column remapped (%s) -> (%s)",
 				        tablename, NameStr(att_tuple->attname), colname));
@@ -1447,6 +1476,15 @@ get_psql_columns(Oid foreigntableid, struct redis_fdw_ctx *rctx)
 			rtable->expiry = i+1;
 			rtable->columns[i].var_field = VAR_EXPIRY;
 			optvalid = true;
+		} else if (strcmp(colname, "valttl") == 0) {
+			/* We can expire individual values only for set and only with KeyDB */
+			if (rctx->table_type == PG_REDIS_SET) {
+				verify_pgtable_coltype(R_INT, att_tuple->atttypid,
+									colname, tablename);
+				rtable->valttl = i+1;
+				rtable->columns[i].var_field = VAR_VALTTL;
+				optvalid = true;
+			}
 		} else if (strcmp(colname, "index") == 0) {
 			if (rctx->table_type == PG_REDIS_LIST ||
 			    rctx->table_type == PG_REDIS_ZSET) {
@@ -1557,6 +1595,10 @@ validate_redis_opts(struct redis_fdw_ctx *rctx)
 		/*
 		 * TABLE (key TEXT, members TEXT[], expiry INT)
 		 * TABLE (key TEXT, member TEXT, expiry INT)
+		 * TABLE (key TEXT, members TEXT[], valttl INT)
+		 * TABLE (key TEXT, member TEXT, valttl INT)
+		 * TABLE (key TEXT, members TEXT[], expiry INT, valttl INT)
+		 * TABLE (key TEXT, member TEXT, expiry INT, valttl INT)
 		 */
 		if (tbl->members <= 0 && tbl->member <= 0)
 			EDYNPARAM(("SET: members[] or member columns required"));
@@ -1710,6 +1752,8 @@ redis_get_var(struct redis_fdw_ctx *rctx, RelOptInfo *foreignrel, Var *var)
 			return VAR_MEMBERS;
 		if (rtable->expiry == var->varattno)
 			return VAR_EXPIRY;
+		if (rtable->valttl == var->varattno)
+			return VAR_VALTTL;			
 		if (rtable->index == var->varattno)
 			return VAR_INDEX;
 		if (rtable->score == var->varattno)
@@ -1970,6 +2014,7 @@ redis_opt_string(DefElem *def, const char *key, char **field)
 		*field = defGetString(def);
 		return *field;
 	}
+	*field = NULL;
 	return NULL;
 }
 
@@ -2420,7 +2465,7 @@ redisBeginForeignScan(ForeignScanState *node, int eflags)
 	   "\tkey: %s\n"
 	   "\tkeyprefix: %s\n"
 	   "\tfield: %s, s_value: %s, table_type-param: %s\n"
-	   "\ti_min: %ld, i_max: %ld\n"
+	   "\ti_min: %" PRId64 ", i_max: %" PRId64 "\n"
 	   "\ti_min_op: %d, i_max_op: %d\n",
 	    rctx->host, rctx->port,
 	    rctx->key,
@@ -2545,6 +2590,10 @@ redisIterateForeignScan(ForeignScanState *node)
 			elog(ERROR, "expiry not supported in WHERE clause");
 		}
 
+		if (rctx->where_flags & PARAM_VALTTL) {
+			elog(ERROR, "valttl not supported in WHERE clause");
+		}
+
 		/* fetch parameters and assign to context conditionals */
 		for (param = rctx->params; param; param = param->next) {
 			ExprState *expr_state = param->param;
@@ -2593,6 +2642,9 @@ redisIterateForeignScan(ForeignScanState *node)
 					break;
 				case VAR_EXPIRY:
 					elog(ERROR, "expiry not permitted in WHERE clause");
+					break;
+				case VAR_VALTTL:
+					elog(ERROR, "valttl not permitted in WHERE clause");
 					break;
 				case VAR_INDEX:
 				case VAR_SCORE:
@@ -2672,7 +2724,7 @@ redisIterateForeignScan(ForeignScanState *node)
 					     "UPDATE/DELETE only allows INDEX \"=\" operator");
 				}
 
-				DEBUG((DEBUG_LEVEL, "  setting index (%ld)", rctx->where_conds.max));
+				DEBUG((DEBUG_LEVEL, "  setting index (%" PRId64 ")", rctx->where_conds.max));
 				index = rctx->where_conds.max;
 			}
 
@@ -2703,6 +2755,24 @@ redisIterateForeignScan(ForeignScanState *node)
 			reply = NULL;
 		}
 
+		/* prefetch valttl if valttl column exists */
+		if ((rctx->rtable.valttl > 0) && (rctx->table_type == PG_REDIS_SET) && (rctx->where_flags & PARAM_MEMBER)) {
+			reply = redisCommand(ctx, "TTL %s %s", rctx->pfxkey, rctx->where_conds.s_value);
+			if (reply == NULL) {
+				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
+				    (ERROR, "NULL reply from redis"));
+
+			} else if (reply->type == REDIS_REPLY_ERROR) {
+				char *errmsg;
+
+				errmsg = pstrdup(reply->str);
+				ERR_CLEANUP(reply, rctx->r_ctx,
+				    (ERROR, "redis replied error on TTL: %s", errmsg));
+			}
+			rctx->valttl = reply->integer;
+			freeReplyObject(reply);
+			reply = NULL;
+		}
 		/* build query to send to redis */
 		switch (rctx->table_type) {
 		case PG_REDIS_STRING:
@@ -2752,9 +2822,9 @@ redisIterateForeignScan(ForeignScanState *node)
 				rctx->rowcount = 0;
 				rctx->rowsdone = 1;
 			} else if (rctx->where_conds.max >= 0) {
-				DEBUG((DEBUG_LEVEL, "LINDEX %s %ld", rctx->pfxkey,
+				DEBUG((DEBUG_LEVEL, "LINDEX %s %" PRId64 "", rctx->pfxkey,
 				       rctx->where_conds.max));
-				rctx->r_reply = redisCommand(ctx, "LINDEX %s %ld",
+				rctx->r_reply = redisCommand(ctx, "LINDEX %s %" PRId64 "",
 				                         rctx->pfxkey, rctx->where_conds.max);
 				rctx->cmd = REDIS_LINDEX;
 			} else {
@@ -2772,9 +2842,9 @@ redisIterateForeignScan(ForeignScanState *node)
 					rctx->rowcount = 0;
 					rctx->rowsdone = 1;
 				} else {
-					DEBUG((DEBUG_LEVEL, "LRANGE %s %d %ld",
+					DEBUG((DEBUG_LEVEL, "LRANGE %s %d %" PRId64 "",
 					      rctx->pfxkey, 0, n));
-					rctx->r_reply = redisCommand(ctx, "LRANGE %s %d %lld",
+					rctx->r_reply = redisCommand(ctx, "LRANGE %s %d %" PRId64 "",
 					                             rctx->pfxkey, 0, n);
 					rctx->cmd = REDIS_LRANGE;
 				}
@@ -2825,7 +2895,7 @@ redisIterateForeignScan(ForeignScanState *node)
 
 				if (rctx->where_conds.max >= rctx->where_conds.min) {
 					DEBUG((DEBUG_LEVEL,
-					      "ZRANGEBYSCORE %s %ld %ld WITHSCORES",
+					      "ZRANGEBYSCORE %s %" PRId64 " %" PRId64 " WITHSCORES",
 					       rctx->pfxkey,
 					       rctx->where_conds.min, rctx->where_conds.max));
 					rctx->r_reply = redisCommand(ctx,
@@ -2834,10 +2904,10 @@ redisIterateForeignScan(ForeignScanState *node)
 					         rctx->where_conds.min, rctx->where_conds.max);
 				} else {
 					DEBUG((DEBUG_LEVEL,
-					      "ZRANGEBYSCORE %s %ld +inf WITHSCORES",
+					      "ZRANGEBYSCORE %s %" PRId64 " +inf WITHSCORES",
 					       rctx->pfxkey, rctx->where_conds.min));
 					rctx->r_reply = redisCommand(ctx,
-					         "ZRANGEBYSCORE %s %ld +inf WITHSCORES",
+					         "ZRANGEBYSCORE %s %" PRId64 " +inf WITHSCORES",
 					         rctx->pfxkey, rctx->where_conds.min);
 				}
 				rctx->cmd = REDIS_ZRANGEBYSCORE;
@@ -2851,11 +2921,11 @@ redisIterateForeignScan(ForeignScanState *node)
 				else if (rctx->where_conds.max_op == ROP_EQ)
 					rctx->where_conds.min = rctx->where_conds.max;
 
-				DEBUG((DEBUG_LEVEL, "ZRANGE %s %ld %ld WITHSCORES",
+				DEBUG((DEBUG_LEVEL, "ZRANGE %s %" PRId64 " %" PRId64 " WITHSCORES",
 				       rctx->pfxkey,
 				       rctx->where_conds.min, rctx->where_conds.max));
 				rctx->r_reply = redisCommand(ctx,
-				                "ZRANGE %s %ld %ld WITHSCORES", rctx->pfxkey,
+				                "ZRANGE %s %" PRId64 " %" PRId64 " WITHSCORES", rctx->pfxkey,
 				                rctx->where_conds.min, rctx->where_conds.max);
 				rctx->cmd = REDIS_ZRANGE;
 			}
@@ -2897,7 +2967,7 @@ redisIterateForeignScan(ForeignScanState *node)
 			} else {
 				DEBUG((DEBUG_LEVEL, "DBSIZE"));
 				rctx->r_reply = redisCommand(ctx, "DBSIZE");
-				rctx->expiry = 0;
+				rctx->expiry = 0; // FIXME probably we need to clear rctx->valttl
 				rctx->cmd = REDIS_DBSIZE;
 			}
 			break;
@@ -2925,7 +2995,6 @@ redisIterateForeignScan(ForeignScanState *node)
 		default:
 			break;
 		}
-
 		if (rctx->r_reply != NULL) {
 			switch (rctx->r_reply->type) {
 			case REDIS_REPLY_INTEGER:
@@ -2945,7 +3014,7 @@ redisIterateForeignScan(ForeignScanState *node)
 				rctx->rowcount = 0;
 				break;
 			default:
-				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
+			    ERR_CLEANUP(rctx->r_reply, rctx->r_ctx, 
 				    (ERROR, "redis error: %s", rctx->r_reply->str));
 			}
 
@@ -3101,6 +3170,7 @@ redisIterateForeignScan(ForeignScanState *node)
 	}
 
 	if (nil_value) {
+		DEBUG((DEBUG_LEVEL, "NIL VALUE *******"));
 		if (rctx->r_reply != NULL) {
 			freeReplyObject(rctx->r_reply);
 			rctx->r_reply = NULL;
@@ -3143,7 +3213,7 @@ fill_slot:
 			value = s_value;
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", i_value);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", i_value);
 			value = pstrdup(vbuf);
 			break;
 		case VAR_MEMBER:
@@ -3156,11 +3226,22 @@ fill_slot:
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
+		    DEBUG((DEBUG_LEVEL, "VAR_EXPIRY CASE"));
 			if (rctx->cmd == REDIS_TTL) {
-				snprintf(vbuf, sizeof(vbuf), "%ld", i_value);
+				snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", i_value);
 				value = pstrdup(vbuf);
 			} else {
-				snprintf(vbuf, sizeof(vbuf), "%ld", rctx->expiry);
+				snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", rctx->expiry);
+				value = pstrdup(vbuf);
+			}
+			break;
+		case VAR_VALTTL:
+		    DEBUG((DEBUG_LEVEL, "VAR_VALTTL CASE"));
+			if (rctx->cmd == REDIS_TTL) {
+				snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", i_value);
+				value = pstrdup(vbuf);
+			} else {
+				snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", rctx->valttl);
 				value = pstrdup(vbuf);
 			}
 			break;
@@ -3170,14 +3251,14 @@ fill_slot:
 				if (!(rctx->where_flags & PARAM_INDEX)) {
 					value = NULL;
 				} else {
-					snprintf(vbuf, sizeof(vbuf), "%ld", index);
+					snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", index);
 					value = pstrdup(vbuf);
 				}
 			} else if (rctx->table_type == PG_REDIS_LIST) {
-				snprintf(vbuf, sizeof(vbuf), "%ld", rctx->where_conds.max);
+				snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", rctx->where_conds.max);
 				value = pstrdup(vbuf);
 			} else if ( rctx->table_type == PG_REDIS_ZSET) {
-				snprintf(vbuf, sizeof(vbuf), "%ld", index);
+				snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", index);
 				value = pstrdup(vbuf);
 			} else {
 				snprintf(vbuf, sizeof(vbuf), "%d", 0);
@@ -3189,7 +3270,7 @@ fill_slot:
 				if (s_score != NULL)
 					value = pstrdup(s_score);
 				else  {
-					snprintf(vbuf, sizeof(vbuf), "%ld", score);
+					snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", score);
 					value = pstrdup(vbuf);
 				}
 			} else {
@@ -3198,7 +3279,7 @@ fill_slot:
 			}
 			break;
 		case VAR_LEN:
-			snprintf(vbuf, sizeof(vbuf), "%ld", i_value);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", i_value);
 			value = pstrdup(vbuf);
 			break;
 		case VAR_TABLE_TYPE:
@@ -3275,10 +3356,19 @@ redisEndForeignScan(ForeignScanState *node)
  *		Add resjunk column(s) needed for update/delete on a foreign table
  */
 static void
-redisAddForeignUpdateTargets(Query *parsetree,
-							 RangeTblEntry *target_rte,
-							 Relation target_relation)
+redisAddForeignUpdateTargets(
+	#if PG_VERSION_NUM < 140000
+		Query *parsetree,
+	#else
+		PlannerInfo *root,
+		Index rtindex,
+	#endif
+		RangeTblEntry *target_rte,
+		Relation target_relation)
 {
+	#if PG_VERSION_NUM < 140000
+  	        TargetEntry *tle;
+	#endif
 	Oid relid = RelationGetRelid(target_relation);
 	TupleDesc tupdesc = target_relation->rd_att;
 	int i;
@@ -3341,8 +3431,7 @@ redisAddForeignUpdateTargets(Query *parsetree,
 		Form_pg_attribute att = &tupdesc->attrs[i];
 #endif
 		AttrNumber attrno = att->attnum;
-		Var *var;
-		TargetEntry *tle;
+		Var *var;		
 		char *colname;
 		int   colkey;
 		bool  skip;
@@ -3355,7 +3444,11 @@ redisAddForeignUpdateTargets(Query *parsetree,
 			DefElem *def = (DefElem *)lfirst(option);
 
 			if (strcmp(def->defname, OPT_REDIS) == 0) {
+#if PG_VERSION_NUM < 150000
 				colname = ((Value *)(def->arg))->val.str;
+#else
+				colname = ((String *)(def->arg))->sval;
+#endif
 
 				DEBUG((DEBUG_LEVEL, "column remapped (%s) -> (%s)",
 				        NameStr(att->attname), colname));
@@ -3418,6 +3511,8 @@ redisAddForeignUpdateTargets(Query *parsetree,
 		if (skip)
 			continue;
 
+#if PG_VERSION_NUM < 140000		
+		/*TargetEntry *tle;*/
 		/* make a Var representing the desired value */
 		var = makeVar(parsetree->resultRelation,
 			attrno,
@@ -3432,6 +3527,18 @@ redisAddForeignUpdateTargets(Query *parsetree,
 			pstrdup(colname),
 			true);
 		parsetree->targetList = lappend(parsetree->targetList, tle);
+#else
+		/* Make a Var representing the desired value */
+		var = makeVar(
+			rtindex,
+			attrno,
+			att->atttypid,
+			att->atttypmod,
+			att->attcollation,
+			0);
+
+		add_row_identity_var(root, var, rtindex, NameStr(att->attname));
+#endif
 	}
 }
 
@@ -3673,6 +3780,9 @@ redisPlanForeignModify(PlannerInfo *root,
 			case VAR_EXPIRY:
 				rctx->param_flags |= PARAM_EXPIRY;
 				break;
+			case VAR_VALTTL:
+				rctx->param_flags |= PARAM_VALTTL;
+				break;
 			case VAR_S_VALUE:
 			case VAR_I_VALUE:
 				rctx->param_flags |= PARAM_VALUE;
@@ -3752,7 +3862,11 @@ redisBeginForeignModify(ModifyTableState *mtstate,
 	/* get resjunk attribute numbers */
 	if (operation == CMD_UPDATE || operation == CMD_DELETE) {
 		/* Find the ctid resjunk column in the subplan's result */
+	#if PG_VERSION_NUM < 140000
 		Plan *subplan = mtstate->mt_plans[subplan_index]->plan;
+	#else
+		Plan *subplan = outerPlanState(mtstate)->plan;
+	#endif
 
 		rctx->key_attno = ExecFindJunkAttributeInTlist(subplan->targetlist,
 		                                               "key");
@@ -3789,6 +3903,7 @@ redisExecForeignInsert(EState *estate,
 	redisReply *expreply = NULL;
 	char vbuf[32];
 
+	bool expiry_already_set = false;
 	bool newkey = false;
 	char *str = NULL;
 	char *val = NULL;
@@ -3810,6 +3925,7 @@ redisExecForeignInsert(EState *estate,
 	MemoryContextReset(rctx->temp_ctx);
 
 	rctx->expiry = 0;
+	rctx->valttl = 0;
 	for (param = rctx->params; param != NULL; param = param->next) {
 		Datum datum = 0;
 		bool isnull;
@@ -3877,6 +3993,14 @@ redisExecForeignInsert(EState *estate,
 					    (ERROR, "invalid value for expiry %s", param->value));
 			}
 			break;
+		case VAR_VALTTL:
+			if (!isnull) {
+				rctx->valttl = atoll(param->value);
+				if (rctx->valttl < 0)
+					ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
+					    (ERROR, "invalid value for valttl %s", param->value));
+			}
+			break;			
 		case VAR_MESSAGE:
 			if (isnull)
 				ERR_CLEANUP(rctx->r_reply, rctx->r_ctx,
@@ -3911,25 +4035,25 @@ redisExecForeignInsert(EState *estate,
 		rctx->cmd = REDIS_SET;
 		if (rctx->expiry > 0) {
 			if (val) {
-				DEBUG((DEBUG_LEVEL, "SET %s %s EX %ld",
+				DEBUG((DEBUG_LEVEL, "SET %s %s EX %" PRId64 "",
 				       rctx->pfxkey, val, rctx->expiry));
-				reply = redisCommand(rctx->r_ctx, "SET %s %s EX %d",
-				    rctx->pfxkey, val, (int)rctx->expiry);
+				reply = redisCommand(rctx->r_ctx, "SET %s %s EX %" PRId64 "",
+				    rctx->pfxkey, val, rctx->expiry);
 			} else {
-				DEBUG((DEBUG_LEVEL, "SET %s %ld EX %ld",
+				DEBUG((DEBUG_LEVEL, "SET %s %" PRId64 " EX %" PRId64 "",
 				      rctx->pfxkey, ival, rctx->expiry));
-				reply = redisCommand(rctx->r_ctx, "SET %s %ld EX %d",
-				    rctx->pfxkey, ival, (int)rctx->expiry);
+				reply = redisCommand(rctx->r_ctx, "SET %s %" PRId64 " EX %" PRId64 "",
+				    rctx->pfxkey, ival, rctx->expiry);
 			}
-			rctx->expiry = 0;
+			expiry_already_set = true;
 		} else {
 			if (val) {
 				DEBUG((DEBUG_LEVEL, "SET %s %s", rctx->pfxkey, val));
 				reply = redisCommand(rctx->r_ctx, "SET %s %s",
 				    rctx->pfxkey, val);
 			} else {
-				DEBUG((DEBUG_LEVEL, "SET %s %ld", rctx->pfxkey, ival));
-				reply = redisCommand(rctx->r_ctx, "SET %s %lld",
+				DEBUG((DEBUG_LEVEL, "SET %s %" PRId64 "", rctx->pfxkey, ival));
+				reply = redisCommand(rctx->r_ctx, "SET %s %" PRId64 "",
 				    rctx->pfxkey, ival);
 			}
 		}
@@ -3955,21 +4079,23 @@ redisExecForeignInsert(EState *estate,
 			DEBUG((DEBUG_LEVEL, "RPUSH %s %s", rctx->pfxkey, val));
 			reply = redisCommand(rctx->r_ctx, "RPUSH %s %s", rctx->pfxkey, val);
 		} else {
-			DEBUG((DEBUG_LEVEL, "RPUSH %s %ld", rctx->pfxkey, ival));
-			reply = redisCommand(rctx->r_ctx, "RPUSH %s %lld",
+			DEBUG((DEBUG_LEVEL, "RPUSH %s %" PRId64 "", rctx->pfxkey, ival));
+			reply = redisCommand(rctx->r_ctx, "RPUSH %s %" PRId64 "",
 			                     rctx->pfxkey, ival);
 		}
 		break;
 	case PG_REDIS_SET:
-		/* INSERT (key, value) */
+		/* INSERT (key, value)
+		 * INSERT (key, value, valttl)  but we will do it later!
+		 */
 		rctx->cmd = REDIS_SADD;
 
 		if (val) {
 			DEBUG((DEBUG_LEVEL, "SADD %s %s", rctx->pfxkey, val));
 			reply = redisCommand(rctx->r_ctx, "SADD %s %s", rctx->pfxkey, val);
 		} else {
-			DEBUG((DEBUG_LEVEL, "SADD %s %ld", rctx->pfxkey, ival));
-			reply = redisCommand(rctx->r_ctx, "SADD %s %lld",
+			DEBUG((DEBUG_LEVEL, "SADD %s %" PRId64 "", rctx->pfxkey, ival));
+			reply = redisCommand(rctx->r_ctx, "SADD %s %" PRId64 "",
 			                     rctx->pfxkey, ival);
 		}
 		break;
@@ -3978,12 +4104,12 @@ redisExecForeignInsert(EState *estate,
 		rctx->cmd = REDIS_ZADD;
 
 		if (val) {
-			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %s", rctx->pfxkey, score, val));
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %lld %s",
+			DEBUG((DEBUG_LEVEL, "ZADD %s %" PRId64 " %s", rctx->pfxkey, score, val));
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %" PRId64 " %s",
 			                     rctx->pfxkey, score, val);
 		} else {
-			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %ld", rctx->pfxkey, score, ival));
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %lld %lld",
+			DEBUG((DEBUG_LEVEL, "ZADD %s %" PRId64 " %" PRId64 "", rctx->pfxkey, score, ival));
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %" PRId64 " %" PRId64 "",
 			                     rctx->pfxkey, score, ival);
 		}
 
@@ -3992,9 +4118,9 @@ redisExecForeignInsert(EState *estate,
 		/* INSERT (key, expiry) */
 		if (rctx->expiry > 0) {
 			rctx->cmd = REDIS_EXPIRE;
-			DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-		                     rctx->pfxkey, (int)rctx->expiry);
+			DEBUG((DEBUG_LEVEL, "EXPIRE %s %" PRId64 "", rctx->pfxkey, rctx->expiry));
+			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %" PRId64 "",
+		                     rctx->pfxkey, rctx->expiry);
 		} else {
 			/* remove expiry */
 			rctx->cmd = REDIS_PERSIST;
@@ -4029,23 +4155,51 @@ redisExecForeignInsert(EState *estate,
 
 	freeReplyObject(reply);
 
-	if (rctx->expiry > 0) {
-		DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-		expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-		                     rctx->pfxkey, (int)rctx->expiry);
+	if (rctx->expiry > 0 && !expiry_already_set) {
+		DEBUG((DEBUG_LEVEL, "EXPIRE %s %" PRId64 "", rctx->pfxkey, rctx->expiry));
+		expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %" PRId64 "",
+		                     rctx->pfxkey, rctx->expiry);
 
 		if (expreply == NULL) {
-			redisFree(rctx->r_ctx);
 			ereport(ERROR,
 			   (errcode(ERRCODE_FDW_ERROR),
 			    errmsg("EXPIRE reply NULL")));
-		} else if (expreply->type == REDIS_REPLY_ERROR) {
-			freeReplyObject(expreply);
 			redisFree(rctx->r_ctx);
-
+		} else if (expreply->type == REDIS_REPLY_ERROR) {
 			ereport(ERROR,
 			   (errcode(ERRCODE_FDW_ERROR),
 			    errmsg("Redis EXIPIRE cmd failed: %s", expreply->str)));
+			redisFree(rctx->r_ctx);
+		}
+		freeReplyObject(expreply);
+	}
+
+	if (rctx->valttl > 0 && rctx->table_type == PG_REDIS_SET) {
+
+		if (val) {
+			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %s %" PRId64 "", rctx->pfxkey, val, rctx->valttl));
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %s %" PRId64 "",
+		                			rctx->pfxkey, val, rctx->valttl);
+		} else {
+			DEBUG((DEBUG_LEVEL, "EXPIREMEMBER %s %" PRId64 " %" PRId64 "", rctx->pfxkey, ival, rctx->valttl));
+			expreply = redisCommand(rctx->r_ctx, "EXPIREMEMBER %s %" PRId64 " %" PRId64 "",
+		                			rctx->pfxkey, ival, rctx->valttl);
+		}
+
+		if (expreply == NULL) {
+			
+			ereport(ERROR,
+			   (errcode(ERRCODE_FDW_ERROR),
+			    errmsg("EXPIREMEMBER reply NULL %d %s", rctx->r_ctx->err, rctx->r_ctx->errstr)));
+
+			redisFree(rctx->r_ctx);
+		} else if (expreply->type == REDIS_REPLY_ERROR) {
+
+			ereport(ERROR,
+			   (errcode(ERRCODE_FDW_ERROR),
+			    errmsg("Redis (KeyDB) EXPIREMEMBER cmd failed: %s", expreply->str)));
+
+				redisFree(rctx->r_ctx);
 		}
 		freeReplyObject(expreply);
 	}
@@ -4083,21 +4237,25 @@ redisExecForeignInsert(EState *estate,
 		case VAR_SARRAY_VALUE:
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64, ival);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
-			snprintf(vbuf, sizeof(vbuf), "%ld", rctx->expiry);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "",  rctx->expiry);
+			retval = pstrdup(vbuf);
+			break;
+		case VAR_VALTTL:
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "",  rctx->valttl);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%ld", rctx->where_conds.min);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "",  rctx->where_conds.min);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCORE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", score);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "",  score);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCARD:
@@ -4106,7 +4264,7 @@ redisExecForeignInsert(EState *estate,
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_LEN:
-			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "",  ival);
 			retval = pstrdup(vbuf);
 			break;
 		default:
@@ -4174,7 +4332,7 @@ redis_get_resjunks(struct redis_fdw_ctx *rctx, TupleTableSlot *planSlot,
 		               rctx->rtable.columns[rctx->rtable.index-1].typoutput, 
 		               datum));
 			rj->index = atoll(s);
-			DEBUG((DEBUG_LEVEL, "update/delete WHERE index = %ld [%s]",
+			DEBUG((DEBUG_LEVEL, "update/delete WHERE index = %" PRId64 " [%s]",
 			      rj->index, s));
 		}
 	}
@@ -4315,6 +4473,16 @@ redisExecForeignUpdate(EState *estate,
 					set_params |= PARAM_EXPIRY;
 			}
 			break;
+		case VAR_VALTTL:
+			DEBUG((DEBUG_LEVEL, "DETECTED valttl = something"));
+			if (!isnull) {
+				rctx->valttl = atoll(param->value);
+				if (rctx->valttl > 0) {
+					DEBUG((DEBUG_LEVEL, "set_params |= PARAM_VALTTL"));
+					set_params |= PARAM_VALTTL;
+				}
+			}
+			break;
 		default:
 			break;
 		}
@@ -4350,22 +4518,22 @@ redisExecForeignUpdate(EState *estate,
 		if (set_params & PARAM_EXPIRY) {
 			if (set_params & PARAM_VALUE) {
 				if (val) {
-					DEBUG((DEBUG_LEVEL, "SET %s %s EX %ld",
+					DEBUG((DEBUG_LEVEL, "SET %s %s EX %" PRId64 "",
 					       rctx->pfxkey, val, rctx->expiry));
-					reply = redisCommand(rctx->r_ctx, "SET %s %s EX %d",
-					                     rctx->pfxkey, val, (int)rctx->expiry);
+					reply = redisCommand(rctx->r_ctx, "SET %s %s EX %" PRId64 "",
+					                     rctx->pfxkey, val, rctx->expiry);
 				} else {
-					DEBUG((DEBUG_LEVEL, "SET %s %ld EX %ld",
+					DEBUG((DEBUG_LEVEL, "SET %s %" PRId64 " EX %" PRId64 "",
 					      rctx->pfxkey, ival, rctx->expiry));
-					reply = redisCommand(rctx->r_ctx, "SET %s %ld EX %d",
-					                    rctx->pfxkey, ival, (int)rctx->expiry);
+					reply = redisCommand(rctx->r_ctx, "SET %s %" PRId64 " EX %" PRId64 "",
+					                    rctx->pfxkey, ival, rctx->expiry);
 				}
 			} else {
 				/* only updating expiry for key */
-				DEBUG((DEBUG_LEVEL, "(SET) EXPIRE %s %ld",
+				DEBUG((DEBUG_LEVEL, "(SET) EXPIRE %s %" PRId64 "",
 				       rctx->pfxkey, rctx->expiry));
-				reply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-				                     rctx->pfxkey, (int)rctx->expiry);
+				reply = redisCommand(rctx->r_ctx, "EXPIRE %s %" PRId64 "",
+				                     rctx->pfxkey, rctx->expiry);
 			}
 		} else {
 			if (set_params & PARAM_VALUE) {
@@ -4375,8 +4543,8 @@ redisExecForeignUpdate(EState *estate,
 					reply = redisCommand(rctx->r_ctx, "SET %s %s",
 					                     rctx->pfxkey, val);
 				} else {
-					DEBUG((DEBUG_LEVEL, "SET %s %ld", rctx->pfxkey, ival));
-					reply = redisCommand(rctx->r_ctx, "SET %s %lld",
+					DEBUG((DEBUG_LEVEL, "SET %s %" PRId64 "", rctx->pfxkey, ival));
+					reply = redisCommand(rctx->r_ctx, "SET %s %" PRId64 "",
 					                     rctx->pfxkey, ival);
 				}
 			} else if (key != NULL && resjunk.key != NULL) {
@@ -4438,14 +4606,14 @@ redisExecForeignUpdate(EState *estate,
 		if ((set_params & PARAM_VALUE) &&
 		    ((resjunk.hasval & PARAM_INDEX) || (set_params & PARAM_INDEX))) {
 			if (val) {
-				DEBUG((DEBUG_LEVEL, "LSET %s %ld %s",
+				DEBUG((DEBUG_LEVEL, "LSET %s %" PRId64 " %s",
 				                    rctx->pfxkey, resjunk.index, val));
-				reply = redisCommand(rctx->r_ctx, "LSET %s %lld %s",
+				reply = redisCommand(rctx->r_ctx, "LSET %s %" PRId64 " %s",
 				    rctx->pfxkey, resjunk.index, val);
 			} else {
-				DEBUG((DEBUG_LEVEL, "LSET %s %ld %ld",
+				DEBUG((DEBUG_LEVEL, "LSET %s %" PRId64 " %" PRId64 "",
 				       rctx->pfxkey, resjunk.index, ival));
-				reply = redisCommand(rctx->r_ctx, "LSET %s %lld %lld",
+				reply = redisCommand(rctx->r_ctx, "LSET %s %" PRId64 " %" PRId64 "",
 				                     rctx->pfxkey, resjunk.index, ival);
 			}
 		} else {
@@ -4457,7 +4625,7 @@ redisExecForeignUpdate(EState *estate,
 		}
 		break;
 	case PG_REDIS_SET:
-		/* UPDATE member WHERE key = x [ AND member = x ] */
+		/* UPDATE member WHERE key = x [ AND member = y ] */
 
 		/* remove old member and add new member to rename */
 		if (set_params & PARAM_MEMBER) {
@@ -4471,11 +4639,20 @@ redisExecForeignUpdate(EState *estate,
 					ERR_CLEANUP(reply, rctx->r_ctx,
 					    (ERROR, "member %s does not exist", resjunk.member));
 				}
+
+				if (set_params & PARAM_VALTTL) {
+					//FIXME set EXPIREMEMBER here !!!
+					DEBUG((DEBUG_LEVEL, "PARAM_VALTTL together with member change"));
+				}
 			}
 			DEBUG((DEBUG_LEVEL, "SADD %s %s", rctx->pfxkey, member));
-			reply = redisCommand(rctx->r_ctx, "SADD %s %s",
-			                     rctx->pfxkey, member);
+
 		} else {
+			if (set_params & PARAM_VALTTL) {
+				reply = redisCommand(rctx->r_ctx, "SADD %s %s",
+			                     rctx->pfxkey, member);
+				DEBUG((DEBUG_LEVEL, "PARAM_VALTTL fix goto and error path"));
+			}
 			if (set_params & PARAM_EXPIRY)
 				goto do_expiry;
 
@@ -4491,7 +4668,7 @@ redisExecForeignUpdate(EState *estate,
 		}
 
 		if (set_params & PARAM_MEMBER) {
-			DEBUG((DEBUG_LEVEL, "ZADD %s %ld %s", rctx->pfxkey, score, member));
+			DEBUG((DEBUG_LEVEL, "ZADD %s %" PRId64 " %s", rctx->pfxkey, score, member));
 			if (resjunk.hasval & PARAM_MEMBER && strcmp(member, resjunk.member) != 0) {
 				/* remove old member */
 				DEBUG((DEBUG_LEVEL, "ZREM %s %s",
@@ -4503,7 +4680,7 @@ redisExecForeignUpdate(EState *estate,
 					    (ERROR, "member %s does not exist", resjunk.member));
 				}
 			}
-			reply = redisCommand(rctx->r_ctx, "ZADD %s %lld %s",
+			reply = redisCommand(rctx->r_ctx, "ZADD %s %ld %s",
 			                     rctx->pfxkey, score, member);
 		} else {
 			if (set_params & PARAM_EXPIRY)
@@ -4516,9 +4693,9 @@ redisExecForeignUpdate(EState *estate,
 	case PG_REDIS_TTL:
 		/* UPDATE SET expiry = x WHERE key = x */
 		if (set_params & PARAM_EXPIRY) {
-			DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-		                     rctx->pfxkey, (int)rctx->expiry);
+			DEBUG((DEBUG_LEVEL, "EXPIRE %s %" PRId64 "", rctx->pfxkey, rctx->expiry));
+			reply = redisCommand(rctx->r_ctx, "EXPIRE %s %" PRId64 "",
+		                     rctx->pfxkey, rctx->expiry);
 		} else {
 			/* remove expiry */
 			DEBUG((DEBUG_LEVEL, "PERSIST %s", rctx->pfxkey));
@@ -4545,9 +4722,9 @@ redisExecForeignUpdate(EState *estate,
 do_expiry:
 	if (set_params & PARAM_EXPIRY) {
 		if (rctx->expiry > 0) {
-			DEBUG((DEBUG_LEVEL, "EXPIRE %s %ld", rctx->pfxkey, rctx->expiry));
-			expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %d",
-			                     rctx->key, (int)rctx->expiry);
+			DEBUG((DEBUG_LEVEL, "EXPIRE %s %" PRId64 "", rctx->pfxkey, rctx->expiry));
+			expreply = redisCommand(rctx->r_ctx, "EXPIRE %s %" PRId64 "",
+			                     rctx->key, rctx->expiry);
 		} else {
 			DEBUG((DEBUG_LEVEL, "PERSIST %s", rctx->pfxkey));
 			expreply = redisCommand(rctx->r_ctx, "PERSIST %s", rctx->key);
@@ -4599,7 +4776,7 @@ do_expiry:
 		case VAR_SARRAY_VALUE:
 			break;
 		case VAR_I_VALUE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", ival);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", ival);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_MEMBER:
@@ -4608,15 +4785,19 @@ do_expiry:
 		case VAR_MEMBERS:
 			break;
 		case VAR_EXPIRY:
-			snprintf(vbuf, sizeof(vbuf), "%ld", rctx->expiry);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", rctx->expiry);
+			retval = pstrdup(vbuf);
+			break;
+		case VAR_VALTTL:
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", rctx->valttl);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%ld", resjunk.index);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", resjunk.index);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCORE:
-			snprintf(vbuf, sizeof(vbuf), "%ld", score);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", score);
 			retval = pstrdup(vbuf);
 			break;
 		case VAR_SCARD:
@@ -4740,7 +4921,7 @@ redisExecForeignDelete(EState *estate,
 #define REDIS_LIST_DEL_MAGIC ":::redis-fdw-marked-for-deletion:::"
 
 			/* rename the index into something unique */
-			reply = redisCommand(rctx->r_ctx, "LSET %s %lld %s",
+			reply = redisCommand(rctx->r_ctx, "LSET %s %ld %s",
 			    rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC);
 			if (reply->type == REDIS_REPLY_ERROR) {
 				char *errmsg;
@@ -4751,9 +4932,9 @@ redisExecForeignDelete(EState *estate,
 			}
 			freeReplyObject(reply);
 
-			DEBUG((DEBUG_LEVEL, "LREM %s %ld %s",
+			DEBUG((DEBUG_LEVEL, "LREM %s %" PRId64 " %s",
 			     rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC));
-			reply = redisCommand(rctx->r_ctx, "LREM %s %lld %s",
+			reply = redisCommand(rctx->r_ctx, "LREM %s %" PRId64 " %s",
 			    rctx->pfxkey, resjunk.index, REDIS_LIST_DEL_MAGIC);
 		}
 		break;
@@ -4844,8 +5025,10 @@ redisExecForeignDelete(EState *estate,
 			break;
 		case VAR_EXPIRY:
 			break;
+		case VAR_VALTTL:
+			break;
 		case VAR_INDEX:
-			snprintf(vbuf, sizeof(vbuf), "%ld", resjunk.index);
+			snprintf(vbuf, sizeof(vbuf), "%" PRId64 "", resjunk.index);
 			retval = vbuf;
 			break;
 		case VAR_SCORE:

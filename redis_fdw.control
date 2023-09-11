@@ -1,5 +1,5 @@
 comment = 'foreign-data wrapper for Redis'
-default_version = '1.0'
+default_version = '1.0.6'
 module_pathname = '$libdir/redis_fdw'
 relocatable = true
 

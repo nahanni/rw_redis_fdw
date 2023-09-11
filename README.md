@@ -10,7 +10,7 @@ This project is currently work in progress and may have experience significant c
 
 **PostgreSQL version compatibility**
 
-Currently tested against PostgreSQL 9.4+, 10, 11, 12. Other versions might work but unconfirmed.
+Currently tested against PostgreSQL 9.4+, 10, 11, 12, 13, 14 and 15. Other versions might work but unconfirmed.
 
 ## Building
 ### Dependencies:
@@ -24,6 +24,22 @@ Currently tested against PostgreSQL 9.4+, 10, 11, 12. Other versions might work 
   sudo PATH=<pgsql_prefix>/bin:$PATH make install
 ```
 where pgsql\_prefix is where you've installed PostgreSQL to, e.g. /usr/local/postgresql/9.4.0
+
+### Build RPM
+
+For Centos 7 you should add Centos SCLO repo and install required packages:
+
+```shell
+yum -y install centos-release-scl-rh
+yum-config-manager --enable rhel-server-rhscl-7-rpms
+yum -y install hiredis-devel postgresql11-devel llvm-toolset-7-clang
+```
+
+And build RPM by command:
+
+```shell
+rpmbuild -tb rw_redis_fdw-<tag>.tar.gz
+```
 
 ## Options
 
