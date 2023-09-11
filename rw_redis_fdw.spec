@@ -1,4 +1,4 @@
-%define redis_fdw_ver   1.0.5
+%define redis_fdw_ver   1.0.6
 %define postgresql_ver  11
 
 Summary:        Redis FDW for PostgreSQL %{postgresql_ver}
@@ -45,6 +45,12 @@ export    PATH=/usr/pgsql-%{postgresql_ver}/bin:$PATH
 %{_prefix}/pgsql-11/share/extension/redis_fdw.control
 
 %changelog
+* Sat Aug 26 2023 p
+- PostreSQL 15 support
+* Wed Dec 07 2022 Andrei Chistyakov
+- PostreSQL 14 support
+* Mon Aug 29 2022 Dmitri Dorofeev
+- Removed %jd from all format strings, using %lld everywhere for 64 bit integers
 * Thu Feb 11 2021 Dmitri Dorofeev
 - Fix redisCommand() format string, it does not support %jd, so we are using %ld
 * Thu Jul 16 2020 Andrei Surgutanov
