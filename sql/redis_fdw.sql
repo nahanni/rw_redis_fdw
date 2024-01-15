@@ -13,12 +13,13 @@ CREATE USER MAPPING FOR public SERVER localredis;
 
 -- STRING
 CREATE FOREIGN TABLE rft_str(
-	key    TEXT,
+	skey   TEXT,     -- relabeled field
 	sval   TEXT,     -- relabeled field
 	expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'string', keyprefix 'rftc_', database '1');
 ALTER FOREIGN TABLE rft_str ALTER COLUMN sval OPTIONS (ADD redis 'value');
+ALTER FOREIGN TABLE rft_str ALTER COLUMN skey OPTIONS (ADD redis 'key');
 
 -- HASH
 CREATE FOREIGN TABLE rft_hash(
@@ -104,18 +105,21 @@ CREATE FOREIGN TABLE rft_keys(
 -- ===================================================================
 
 -- STRING
-INSERT INTO rft_str (key, sval) VALUES ('strkey', 'strval');
-INSERT INTO rft_str (key, sval, expiry) VALUES ('strkey2', 'has-expiry', 30);
+INSERT INTO rft_str (skey, sval) VALUES ('strkey', 'strval');
+INSERT INTO rft_str (skey, sval, expiry) VALUES ('strkey2', 'has-expiry', 30);
 
-SELECT * FROM rft_str WHERE key = 'strkey';
-SELECT * FROM rft_str WHERE key = 'strkey2';
+SELECT * FROM rft_str WHERE skey = 'strkey';
+SELECT * FROM rft_str WHERE skey = 'strkey2';
 
-UPDATE rft_str SET sval = (SELECT 'updated-strval'::TEXT) WHERE key = 'strkey';
-SELECT * FROM rft_str WHERE key = 'strkey';
-SELECT * FROM rft_str WHERE key = 'strkey2';
+UPDATE rft_str SET sval = (SELECT 'updated-strval'::TEXT) WHERE skey = 'strkey';
+SELECT * FROM rft_str WHERE skey = 'strkey';
+SELECT * FROM rft_str WHERE skey = 'strkey2';
 
-UPDATE rft_str SET sval = 'updated-strval2' WHERE key = (SELECT 'strkey'::TEXT);
-SELECT * FROM rft_str WHERE key = 'strkey';
+UPDATE rft_str SET sval = 'updated-strval2' WHERE skey = (SELECT 'strkey'::TEXT);
+SELECT * FROM rft_str WHERE skey = 'strkey';
+
+UPDATE rft_str SET sval = 'updated-strval3' WHERE skey = format('%s', 'strkey'::TEXT);
+SELECT * FROM rft_str WHERE skey = 'strkey';
 
 -- HASH
 INSERT INTO rft_hash (key, field, value) VALUES ('hkey', 'f1', 'v1');
@@ -247,8 +251,8 @@ SELECT * FROM rft_zset WHERE key = 'zkey';
 -- ===================================================================
 
 -- delete all keys
-DELETE FROM rft_str WHERE key = 'strkey';
-DELETE FROM rft_str WHERE key = 'strkey2';
+DELETE FROM rft_str WHERE skey = 'strkey';
+DELETE FROM rft_str WHERE skey = format('%s', 'strkey2'::TEXT);
 
 DELETE FROM rft_hash WHERE key = 'hkey';
 DELETE FROM rft_hash WHERE key = 'hkey2';
