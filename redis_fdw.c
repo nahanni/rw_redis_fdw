@@ -3537,7 +3537,7 @@ redisAddForeignUpdateTargets(
 			att->attcollation,
 			0);
 
-		add_row_identity_var(root, var, rtindex, NameStr(att->attname));
+		add_row_identity_var(root, var, rtindex, colname);
 #endif
 	}
 }
@@ -4405,7 +4405,7 @@ redisExecForeignUpdate(EState *estate,
 	MemoryContextReset(rctx->temp_ctx);
 
 	/*
-	 * Get resjunk columns which are the paramters provided for the
+	 * Get resjunk columns which are the parameters provided for the
 	 * WHERE clause (from IterateForeignScan results)
 	 */
 	redis_get_resjunks(rctx, planSlot, &resjunk);
