@@ -1,0 +1,328 @@
+CREATE EXTENSION
+CREATE SERVER
+CREATE USER MAPPING
+CREATE FOREIGN TABLE
+ALTER FOREIGN TABLE
+ALTER FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+CREATE FOREIGN TABLE
+INSERT 0 1
+INSERT 0 1
+  skey  |  sval  | expiry 
+--------+--------+--------
+ strkey | strval |     -1
+(1 строка)
+
+  skey   |    sval    | expiry 
+---------+------------+--------
+ strkey2 | has-expiry |     30
+(1 строка)
+
+UPDATE 1
+  skey  |      sval      | expiry 
+--------+----------------+--------
+ strkey | updated-strval |     -1
+(1 строка)
+
+  skey   |    sval    | expiry 
+---------+------------+--------
+ strkey2 | has-expiry |     30
+(1 строка)
+
+UPDATE 1
+  skey  |      sval       | expiry 
+--------+-----------------+--------
+ strkey | updated-strval2 |     -1
+(1 строка)
+
+UPDATE 1
+  skey  |      sval       | expiry 
+--------+-----------------+--------
+ strkey | updated-strval3 |     -1
+(1 строка)
+
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+ key  | field | value | expiry 
+------+-------+-------+--------
+ hkey | f1    | v1    |     10
+ hkey | f2    | v2    |     10
+ hkey | f4    | v4    |     10
+(3 строки)
+
+ key  | field | value | expiry 
+------+-------+-------+--------
+ hkey | f1    | v1    |     10
+(1 строка)
+
+ key  | field | value | expiry 
+------+-------+-------+--------
+ hkey | f4    | v4    |     10
+(1 строка)
+
+  key  | field | value | expiry 
+-------+-------+-------+--------
+ hkey2 | f2    | v2    |     10
+(1 строка)
+
+ key | field | value | expiry 
+-----+-------+-------+--------
+(0 строк)
+
+    key    | field |   value    | expiry 
+-----------+-------+------------+--------
+ rfth_hkey | f1    | v1-updated |      0
+(1 строка)
+
+UPDATE 1
+ key  | field |   value    | expiry 
+------+-------+------------+--------
+ hkey | f1    | v1-updated |     10
+ hkey | f2    | v2         |     10
+ hkey | f4    | v4         |     10
+(3 строки)
+
+ key  |   field    |       value        | expiry 
+------+------------+--------------------+--------
+ hkey | {f1,f2,f4} | {v1-updated,v2,v4} |     10
+(1 строка)
+
+ERROR:  foreign table "rft_mhash" does not allow inserts
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+ key  | member  | expiry 
+------+---------+--------
+ skey | member4 |      0
+(1 строка)
+
+INSERT 0 1
+ key  | member  | expiry 
+------+---------+--------
+ skey | member1 |     -1
+ skey | member2 |     -1
+ skey | member3 |     -1
+ skey | member4 |     -1
+(4 строки)
+
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+ key  | value | index | expiry 
+------+-------+-------+--------
+ lkey | idx0  |     0 |     -1
+ lkey | idx1  |     1 |     -1
+ lkey | idx2  |     2 |     -1
+ lkey | idx3  |     3 |     -1
+(4 строки)
+
+UPDATE 1
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+ lkey | idx2         |     2 |     -1
+ lkey | idx3         |     3 |     -1
+(4 строки)
+
+DELETE 1
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+ lkey | idx2         |     2 |     -1
+(3 строки)
+
+ key | value | index | expiry 
+-----+-------+-------+--------
+     |       |     0 |       
+(1 строка)
+
+DELETE 1
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+ lkey | idx2         |     2 |     -1
+(3 строки)
+
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member1 |     1 |     0 |     -1
+ zkey | member2 |     2 |     1 |     -1
+ zkey | member3 |     3 |     2 |     -1
+(3 строки)
+
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     0 |     1 |     -1
+(1 строка)
+
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     2 |     1 |     -1
+(1 строка)
+
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member3 |     3 |     2 |     -1
+(1 строка)
+
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     2 |     1 |     -1
+ zkey | member3 |     3 |     2 |     -1
+(2 строки)
+
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     2 |     0 |     -1
+ zkey | member3 |     3 |     0 |     -1
+(2 строки)
+
+    key    | expiry 
+-----------+--------
+ rftz_zkey |     -1
+(1 строка)
+
+UPDATE 1
+    key    | expiry 
+-----------+--------
+ rftz_zkey |      3
+(1 строка)
+
+    key    | tabletype | len | expiry 
+-----------+-----------+-----+--------
+ rftz_zkey | zset      |   3 |      3
+(1 строка)
+
+ key | tabletype | len | expiry 
+-----+-----------+-----+--------
+ *   | *         |   7 |      0
+(1 строка)
+
+ channel | message | len 
+---------+---------+-----
+ chan    | message |   0
+(1 строка)
+
+INSERT 0 1
+ channel | message | len 
+---------+---------+-----
+ chan    |         |   0
+(1 строка)
+
+ERROR:  only INSERT is permitted for PUBLISH
+ERROR:  only INSERT is permitted for PUBLISH
+     key      
+--------------
+ rfth_hkey2
+ rftl_lkey
+ rfts_skey
+ rftc_strkey2
+ rftz_zkey
+ rftc_strkey
+ rfth_hkey
+(7 строк)
+
+    key    
+-----------
+ rftz_zkey
+(1 строка)
+
+DELETE 1
+ key  | field |   value    | expiry 
+------+-------+------------+--------
+ hkey | f1    | v1-updated |     10
+ hkey | f4    | v4         |     10
+(2 строки)
+
+ key | field | value | expiry 
+-----+-------+-------+--------
+(0 строк)
+
+ key  |  field  |      value      | expiry 
+------+---------+-----------------+--------
+ hkey | {f1,f4} | {v1-updated,v4} |     10
+(1 строка)
+
+DELETE 1
+ key | field | value | expiry 
+-----+-------+-------+--------
+(0 строк)
+
+DELETE 1
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+(2 строки)
+
+DELETE 1
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | updated-idx2 |     0 |     -1
+(1 строка)
+
+DELETE 1
+ key  | member  | expiry 
+------+---------+--------
+ skey | member1 |     -1
+ skey | member3 |     -1
+ skey | member4 |     -1
+(3 строки)
+
+ key  | member  | expiry 
+------+---------+--------
+ skey | member3 |     -1
+(1 строка)
+
+DELETE 1
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member1 |     1 |     0 |      3
+ zkey | member2 |     2 |     1 |      3
+(2 строки)
+
+DELETE 1
+DELETE 1
+DELETE 1
+DELETE 1
+DELETE 1
+ key | value | index | expiry 
+-----+-------+-------+--------
+(0 строк)
+
+DELETE 1
+ key | member | score | index | expiry 
+-----+--------+-------+-------+--------
+(0 строк)
+
+    key    
+-----------
+ rfts_skey
+(1 строка)
+
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE
+DROP FOREIGN TABLE

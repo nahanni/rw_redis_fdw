@@ -19,3 +19,7 @@
 2023-08-26 Version 1.0.6
 
 - PostrgeSQL 15 support
+
+2024-01-15 Version 1.0.7
+
+- Fix error with UPDATE/DELETE operations with function calls
