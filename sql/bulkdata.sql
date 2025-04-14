@@ -1,18 +1,13 @@
-CREATE EXTENSION redis_fdw;
-
-CREATE SERVER localredis FOREIGN DATA WRAPPER redis_fdw;
-CREATE USER MAPPING FOR public SERVER localredis;
-
 CREATE FOREIGN TABLE rft_str(
-	key    TEXT,
-	value  TEXT,
-	expiry INT
+    key    TEXT,
+    value  TEXT,
+    expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'string');
 
 CREATE TEMP TABLE bt(
-	k	TEXT,
-	v	TEXT
+    k TEXT,
+    v TEXT
 );
 
 COPY bt (k, v) FROM STDIN;

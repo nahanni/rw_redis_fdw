@@ -1,0 +1,531 @@
+-- ===================================================================
+-- create FDW objects
+-- ===================================================================
+CREATE EXTENSION redis_fdw;
+CREATE SERVER localredis FOREIGN DATA WRAPPER redis_fdw
+    OPTIONS(host 'localhost', port '6379');
+CREATE USER MAPPING FOR public SERVER localredis;
+-- ===================================================================
+-- create objects used through FDW loopback server
+-- ===================================================================
+-- STRING
+CREATE FOREIGN TABLE rft_str(
+    skey   TEXT,     -- relabeled field
+    sval   TEXT,     -- relabeled field
+    expiry INT
+) SERVER localredis
+  OPTIONS (tabletype 'string', keyprefix 'rftc_', database '1');
+ALTER FOREIGN TABLE rft_str ALTER COLUMN sval OPTIONS (ADD redis 'value');
+ALTER FOREIGN TABLE rft_str ALTER COLUMN skey OPTIONS (ADD redis 'key');
+-- HASH
+CREATE FOREIGN TABLE rft_hash(
+    key    TEXT,
+    field  TEXT,
+    value  TEXT,
+    expiry INT
+) SERVER localredis
+  OPTIONS (tabletype 'hash', keyprefix 'rfth_', database '1');
+-- MHASH
+CREATE FOREIGN TABLE rft_mhash(
+    key    TEXT,
+    field  TEXT[],
+    value  TEXT[],
+    expiry INT
+) SERVER localredis
+  OPTIONS (tabletype 'mhash', keyprefix 'rfth_', database '1');
+-- LIST
+CREATE FOREIGN TABLE rft_list(
+    key    TEXT,
+    value  TEXT,
+    "index" INT,
+    expiry INT
+) SERVER localredis
+  OPTIONS (tabletype 'list', keyprefix 'rftl_', database '1');
+-- SET
+CREATE FOREIGN TABLE rft_set(
+    key    TEXT,
+    member TEXT,
+    expiry INT
+) SERVER localredis
+  OPTIONS (tabletype 'set', keyprefix 'rfts_', database '1');
+-- ZSET
+CREATE FOREIGN TABLE rft_zset(
+    key     TEXT,
+    member  TEXT,
+    score   INT,
+    "index" INT,
+    expiry  INT
+) SERVER localredis
+  OPTIONS (tabletype 'zset', keyprefix 'rftz_', database '1');
+-- TTL
+CREATE FOREIGN TABLE rft_ttl(
+    key    TEXT,
+    expiry INT
+) SERVER localredis
+  OPTIONS (tabletype 'ttl', database '1');
+-- LEN
+CREATE FOREIGN TABLE rft_len(
+    key       TEXT,
+    tabletype TEXT,
+    len       INT,
+    expiry    INT
+) SERVER localredis
+  OPTIONS (tabletype 'len', database '1');
+-- PUBLISH
+CREATE FOREIGN TABLE rft_pub(
+    channel   TEXT,
+    message   TEXT,
+    len       INT
+) SERVER localredis
+  OPTIONS (tabletype 'publish', database '1');
+-- KEYS
+CREATE FOREIGN TABLE rft_keys(
+    key       TEXT
+) SERVER localredis
+  OPTIONS (tabletype 'keys', database '1');
+-- ===================================================================
+-- simple insert
+-- ===================================================================
+-- STRING
+INSERT INTO rft_str (skey, sval) VALUES ('strkey', 'strval');
+INSERT INTO rft_str (skey, sval, expiry) VALUES ('strkey2', 'has-expiry', 30);
+SELECT * FROM rft_str WHERE skey = 'strkey';
+  skey  |  sval  | expiry 
+--------+--------+--------
+ strkey | strval |     -1
+(1 row)
+
+SELECT * FROM rft_str WHERE skey = 'strkey2';
+  skey   |    sval    | expiry 
+---------+------------+--------
+ strkey2 | has-expiry |     30
+(1 row)
+
+UPDATE rft_str SET sval = (SELECT 'updated-strval'::TEXT) WHERE skey = 'strkey';
+SELECT * FROM rft_str WHERE skey = 'strkey';
+  skey  |      sval      | expiry 
+--------+----------------+--------
+ strkey | updated-strval |     -1
+(1 row)
+
+SELECT * FROM rft_str WHERE skey = 'strkey2';
+  skey   |    sval    | expiry 
+---------+------------+--------
+ strkey2 | has-expiry |     30
+(1 row)
+
+UPDATE rft_str SET sval = 'updated-strval2' WHERE skey = (SELECT 'strkey'::TEXT);
+SELECT * FROM rft_str WHERE skey = 'strkey';
+  skey  |      sval       | expiry 
+--------+-----------------+--------
+ strkey | updated-strval2 |     -1
+(1 row)
+
+UPDATE rft_str SET sval = 'updated-strval3' WHERE skey = format('%s', 'strkey'::TEXT);
+SELECT * FROM rft_str WHERE skey = 'strkey';
+  skey  |      sval       | expiry 
+--------+-----------------+--------
+ strkey | updated-strval3 |     -1
+(1 row)
+
+-- HASH
+INSERT INTO rft_hash (key, field, value) VALUES ('hkey', 'f1', 'v1');
+INSERT INTO rft_hash (key, field, value, expiry) VALUES ('hkey', 'f2', 'v2', 10);
+INSERT INTO rft_hash (key, field, value, expiry) VALUES ('hkey', 'f4', 'v4', 10);
+INSERT INTO rft_hash (key, field, value, expiry) VALUES ('hkey2', 'f2', 'v2', 10);
+SELECT * FROM rft_hash WHERE key = 'hkey';
+ key  | field | value | expiry 
+------+-------+-------+--------
+ hkey | f1    | v1    |     10
+ hkey | f2    | v2    |     10
+ hkey | f4    | v4    |     10
+(3 rows)
+
+SELECT * FROM rft_hash WHERE key = 'hkey' AND field = 'f1';
+ key  | field | value | expiry 
+------+-------+-------+--------
+ hkey | f1    | v1    |     10
+(1 row)
+
+SELECT * FROM rft_hash WHERE key = 'hkey' AND field = 'f4';
+ key  | field | value | expiry 
+------+-------+-------+--------
+ hkey | f4    | v4    |     10
+(1 row)
+
+SELECT * FROM rft_hash WHERE key = 'hkey2' AND field = 'f2';
+  key  | field | value | expiry 
+-------+-------+-------+--------
+ hkey2 | f2    | v2    |     10
+(1 row)
+
+--    non-exist
+SELECT * FROM rft_hash WHERE key = 'hkey' AND field = 'f3';
+ key | field | value | expiry 
+-----+-------+-------+--------
+(0 rows)
+
+UPDATE rft_hash SET value = 'v1-updated' WHERE key = 'hkey' AND field = 'f1'
+       RETURNING *;
+    key    | field |   value    | expiry 
+-----------+-------+------------+--------
+ rfth_hkey | f1    | v1-updated |      0
+(1 row)
+
+SELECT * FROM rft_hash WHERE key = (SELECT 'hkey'::TEXT);
+ key  | field |   value    | expiry 
+------+-------+------------+--------
+ hkey | f1    | v1-updated |     10
+ hkey | f2    | v2         |     10
+ hkey | f4    | v4         |     10
+(3 rows)
+
+-- MHASH/HMSET
+SELECT * FROM rft_mhash WHERE key = 'hkey';
+ key  |   field    |       value        | expiry 
+------+------------+--------------------+--------
+ hkey | {f1,f2,f4} | {v1-updated,v2,v4} |     10
+(1 row)
+
+-- *** The following insert is expected to fail because
+--     insertion not allowed into mhash
+INSERT INTO rft_mhash (key, field, value) VALUES ('hkey', '{foo}', '{fee}');
+ERROR:  foreign table "rft_mhash" does not allow inserts
+-- SET
+INSERT INTO rft_set (key, member) VALUES ('skey', 'member1');
+INSERT INTO rft_set (key, member) VALUES ('skey', 'member2');
+INSERT INTO rft_set (key, member) VALUES ('skey', 'member3');
+INSERT INTO rft_set (key, member) VALUES ('skey', 'member4') RETURNING *;
+ key  | member  | expiry 
+------+---------+--------
+ skey | member4 |      0
+(1 row)
+
+SELECT * FROM rft_set WHERE key = 'skey' ORDER BY member;
+ key  | member  | expiry 
+------+---------+--------
+ skey | member1 |     -1
+ skey | member2 |     -1
+ skey | member3 |     -1
+ skey | member4 |     -1
+(4 rows)
+
+-- LIST
+INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx0', 0);
+INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx1', 1);
+INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx2', 2);
+INSERT INTO rft_list (key, value, "index") VALUES ('lkey', 'idx3', 3);
+SELECT * FROM rft_list WHERE key = 'lkey';
+ key  | value | index | expiry 
+------+-------+-------+--------
+ lkey | idx0  |     0 |     -1
+ lkey | idx1  |     1 |     -1
+ lkey | idx2  |     2 |     -1
+ lkey | idx3  |     3 |     -1
+(4 rows)
+
+UPDATE rft_list SET value = 'updated-idx2' WHERE index = 1 and key = 'lkey';
+SELECT * FROM rft_list WHERE key = 'lkey';
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+ lkey | idx2         |     2 |     -1
+ lkey | idx3         |     3 |     -1
+(4 rows)
+
+DELETE FROM rft_list WHERE key = 'lkey' AND value = 'idx3';
+SELECT * FROM rft_list WHERE key = 'lkey';
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+ lkey | idx2         |     2 |     -1
+(3 rows)
+
+--    delete non-existent value
+DELETE FROM rft_list WHERE key = 'lkey' AND value = 'some-value' RETURNING *;
+ key | value | index | expiry 
+-----+-------+-------+--------
+     |       |     0 |       
+(1 row)
+
+SELECT * FROM rft_list WHERE key = 'lkey';
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+ lkey | idx2         |     2 |     -1
+(3 rows)
+
+-- ZSET
+INSERT INTO rft_zset (key, member, score) VALUES ('zkey', 'member1', 1);
+INSERT INTO rft_zset (key, member, score) VALUES ('zkey', 'member2', 2);
+INSERT INTO rft_zset (key, member, score) VALUES ('zkey', 'member3', 3);
+SELECT * FROM rft_zset WHERE key = 'zkey';
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member1 |     1 |     0 |     -1
+ zkey | member2 |     2 |     1 |     -1
+ zkey | member3 |     3 |     2 |     -1
+(3 rows)
+
+SELECT * FROM rft_zset WHERE key = 'zkey' AND member = 'member2';
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     0 |     1 |     -1
+(1 row)
+
+SELECT * FROM rft_zset WHERE key = 'zkey' AND index = 1;
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     2 |     1 |     -1
+(1 row)
+
+SELECT * FROM rft_zset WHERE key = 'zkey' AND index > 1 AND index <= 3;
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member3 |     3 |     2 |     -1
+(1 row)
+
+SELECT * FROM rft_zset WHERE key = 'zkey' AND index > 0 AND index < 3;
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     2 |     1 |     -1
+ zkey | member3 |     3 |     2 |     -1
+(2 rows)
+
+SELECT * FROM rft_zset WHERE key = 'zkey' AND score > 1;
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member2 |     2 |     0 |     -1
+ zkey | member3 |     3 |     0 |     -1
+(2 rows)
+
+-- TTL
+SELECT * FROM rft_ttl WHERE key = 'rftz_zkey';
+    key    | expiry 
+-----------+--------
+ rftz_zkey |     -1
+(1 row)
+
+UPDATE rft_ttl SET expiry = 3 WHERE key = 'rftz_zkey';
+SELECT * FROM rft_ttl WHERE key = 'rftz_zkey';
+    key    | expiry 
+-----------+--------
+ rftz_zkey |      3
+(1 row)
+
+-- LEN
+SELECT * FROM rft_len WHERE key = 'rftz_zkey' AND tabletype = 'zset';
+    key    | tabletype | len | expiry 
+-----------+-----------+-----+--------
+ rftz_zkey | zset      |   3 |      3
+(1 row)
+
+SELECT * FROM rft_len WHERE key = '*';
+ key | tabletype | len | expiry 
+-----+-----------+-----+--------
+ *   | *         |   7 |      0
+(1 row)
+
+-- PUBLISH
+-- only SELECT and INSERT permitted
+INSERT INTO rft_pub VALUES('chan', 'message') RETURNING *;
+ channel | message | len 
+---------+---------+-----
+ chan    | message |   0
+(1 row)
+
+SELECT * FROM rft_pub WHERE channel = 'chan';
+ channel | message | len 
+---------+---------+-----
+ chan    |         |   0
+(1 row)
+
+-- update will fail as it is not supported for "publish"
+UPDATE rft_pub SET message = 'something' WHERE channel = 'chan';
+ERROR:  only INSERT is permitted for PUBLISH
+-- delete will fail as it is not supported for "publish"
+DELETE FROM rft_pub WHERE channel = 'chan';
+ERROR:  only INSERT is permitted for PUBLISH
+-- list keys
+SELECT * FROM rft_keys ORDER BY key;
+     key      
+--------------
+ rftc_strkey
+ rftc_strkey2
+ rfth_hkey
+ rfth_hkey2
+ rftl_lkey
+ rfts_skey
+ rftz_zkey
+(7 rows)
+
+-- list keys with pattern
+SELECT * FROM rft_keys WHERE key = 'rftz*';
+    key    
+-----------
+ rftz_zkey
+(1 row)
+
+-- ===================================================================
+-- delete
+-- ===================================================================
+DELETE FROM rft_hash WHERE key = 'hkey' AND field = 'f2';
+SELECT * FROM rft_hash WHERE key = 'hkey';
+ key  | field |   value    | expiry 
+------+-------+------------+--------
+ hkey | f1    | v1-updated |     10
+ hkey | f4    | v4         |     10
+(2 rows)
+
+SELECT * FROM rft_hash WHERE key = 'hkey' AND field = 'f2';
+ key | field | value | expiry 
+-----+-------+-------+--------
+(0 rows)
+
+-- show table in mhash format
+SELECT * FROM rft_mhash WHERE key = 'hkey';
+ key  |  field  |      value      | expiry 
+------+---------+-----------------+--------
+ hkey | {f1,f4} | {v1-updated,v4} |     10
+(1 row)
+
+-- delete entire key
+DELETE FROM rft_hash WHERE key = 'hkey';
+SELECT * FROM rft_hash WHERE key = 'hkey';
+ key | field | value | expiry 
+-----+-------+-------+--------
+(0 rows)
+
+-- delete list item at index
+DELETE FROM rft_list WHERE key = 'lkey' AND index = 2;
+SELECT * FROM rft_list WHERE key = 'lkey';
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | idx0         |     0 |     -1
+ lkey | updated-idx2 |     1 |     -1
+(2 rows)
+
+-- delete first list item
+DELETE FROM rft_list WHERE key = 'lkey' AND index = 0;
+SELECT * FROM rft_list WHERE key = 'lkey';
+ key  |    value     | index | expiry 
+------+--------------+-------+--------
+ lkey | updated-idx2 |     0 |     -1
+(1 row)
+
+DELETE FROM rft_set WHERE key = 'skey' AND member = 'member2';
+SELECT * FROM rft_set WHERE key = 'skey' ORDER BY member;
+ key  | member  | expiry 
+------+---------+--------
+ skey | member1 |     -1
+ skey | member3 |     -1
+ skey | member4 |     -1
+(3 rows)
+
+SELECT * FROM rft_set WHERE key = 'skey' AND member = 'member3';
+ key  | member  | expiry 
+------+---------+--------
+ skey | member3 |     -1
+(1 row)
+
+DELETE FROM rft_zset WHERE key = 'zkey' AND member = 'member3';
+SELECT * FROM rft_zset WHERE key = 'zkey';
+ key  | member  | score | index | expiry 
+------+---------+-------+-------+--------
+ zkey | member1 |     1 |     0 |      3
+ zkey | member2 |     2 |     1 |      3
+(2 rows)
+
+-- ===================================================================
+-- functions with where clause
+-- ===================================================================
+-- see https://github.com/nahanni/rw_redis_fdw/issues/14
+CREATE OR REPLACE FUNCTION where_clause_func_expr()
+  RETURNS TEXT
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  DECLARE
+    _str TEXT = 'strkey';
+    _val TEXT;
+  BEGIN
+    SELECT sval INTO _val FROM rft_str WHERE skey = lower(_str);
+    RETURN _val;
+  END;
+END;
+$$;
+-- same but for T_OpExpr
+CREATE OR REPLACE FUNCTION where_clause_op_expr()
+  RETURNS TEXT
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  DECLARE
+    _str JSON = '{"key":"strkey"}'::JSON;
+    _val TEXT;
+  BEGIN
+    SELECT sval INTO _val FROM rft_str WHERE skey = _str->>'key';
+    RETURN _val;
+  END;
+END;
+$$;
+-- on sixth call T_ConstExpr will be replaced with T_FuncExpr on PostgreSQL>=10
+SELECT where_clause_func_expr(), where_clause_func_expr(),
+      where_clause_func_expr(), where_clause_func_expr(),
+      where_clause_func_expr(), where_clause_func_expr();
+ where_clause_func_expr | where_clause_func_expr | where_clause_func_expr | where_clause_func_expr | where_clause_func_expr | where_clause_func_expr 
+------------------------+------------------------+------------------------+------------------------+------------------------+------------------------
+ updated-strval3        | updated-strval3        | updated-strval3        | updated-strval3        | updated-strval3        | updated-strval3
+(1 row)
+
+-- on sixth call T_ConstExpr will be replaced with T_OpExpr on PostgreSQL>=10
+SELECT where_clause_op_expr(), where_clause_op_expr(),
+      where_clause_op_expr(), where_clause_op_expr(),
+      where_clause_op_expr(), where_clause_op_expr();
+ where_clause_op_expr | where_clause_op_expr | where_clause_op_expr | where_clause_op_expr | where_clause_op_expr | where_clause_op_expr 
+----------------------+----------------------+----------------------+----------------------+----------------------+----------------------
+ updated-strval3      | updated-strval3      | updated-strval3      | updated-strval3      | updated-strval3      | updated-strval3
+(1 row)
+
+DROP FUNCTION where_clause_func_expr();
+DROP FUNCTION where_clause_op_expr();
+-- ===================================================================
+-- cleanup
+-- ===================================================================
+-- delete all keys
+DELETE FROM rft_str WHERE skey = 'strkey';
+DELETE FROM rft_str WHERE skey = format('%s', 'strkey2'::TEXT);
+DELETE FROM rft_hash WHERE key = 'hkey';
+DELETE FROM rft_hash WHERE key = 'hkey2';
+DELETE FROM rft_list WHERE key = 'lkey';
+SELECT * FROM rft_list WHERE key = 'lkey';
+ key | value | index | expiry 
+-----+-------+-------+--------
+(0 rows)
+
+DELETE FROM rft_zset WHERE key = 'zkey';
+SELECT * FROM rft_zset WHERE key = 'zkey';
+ key | member | score | index | expiry 
+-----+--------+-------+-------+--------
+(0 rows)
+
+-- list remaining keys
+SELECT * FROM rft_keys;
+    key    
+-----------
+ rfts_skey
+(1 row)
+
+DROP FOREIGN TABLE rft_str;
+DROP FOREIGN TABLE rft_hash;
+DROP FOREIGN TABLE rft_mhash;
+DROP FOREIGN TABLE rft_list;
+DROP FOREIGN TABLE rft_set;
+DROP FOREIGN TABLE rft_zset;
+DROP FOREIGN TABLE rft_ttl;
+DROP FOREIGN TABLE rft_len;
+DROP FOREIGN TABLE rft_pub;
+DROP FOREIGN TABLE rft_keys;

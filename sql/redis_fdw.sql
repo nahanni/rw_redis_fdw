@@ -4,7 +4,8 @@
 
 CREATE EXTENSION redis_fdw;
 
-CREATE SERVER localredis FOREIGN DATA WRAPPER redis_fdw;
+CREATE SERVER localredis FOREIGN DATA WRAPPER redis_fdw
+    OPTIONS(host 'localhost', port '6379');
 CREATE USER MAPPING FOR public SERVER localredis;
 
 -- ===================================================================
@@ -13,88 +14,89 @@ CREATE USER MAPPING FOR public SERVER localredis;
 
 -- STRING
 CREATE FOREIGN TABLE rft_str(
-	key    TEXT,
-	sval   TEXT,     -- relabeled field
-	expiry INT
+    skey   TEXT,     -- relabeled field
+    sval   TEXT,     -- relabeled field
+    expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'string', keyprefix 'rftc_', database '1');
 ALTER FOREIGN TABLE rft_str ALTER COLUMN sval OPTIONS (ADD redis 'value');
+ALTER FOREIGN TABLE rft_str ALTER COLUMN skey OPTIONS (ADD redis 'key');
 
 -- HASH
 CREATE FOREIGN TABLE rft_hash(
-	key    TEXT,
-	field  TEXT,
-	value  TEXT,
-	expiry INT
+    key    TEXT,
+    field  TEXT,
+    value  TEXT,
+    expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'hash', keyprefix 'rfth_', database '1');
 
 
 -- MHASH
 CREATE FOREIGN TABLE rft_mhash(
-	key    TEXT,
-	field  TEXT[],
-	value  TEXT[],
-	expiry INT
+    key    TEXT,
+    field  TEXT[],
+    value  TEXT[],
+    expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'mhash', keyprefix 'rfth_', database '1');
 
 
 -- LIST
 CREATE FOREIGN TABLE rft_list(
-	key    TEXT,
-	value  TEXT,
-	"index" INT,
-	expiry INT
+    key    TEXT,
+    value  TEXT,
+    "index" INT,
+    expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'list', keyprefix 'rftl_', database '1');
 
 
 -- SET
 CREATE FOREIGN TABLE rft_set(
-	key    TEXT,
-	member TEXT,
-	expiry INT
+    key    TEXT,
+    member TEXT,
+    expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'set', keyprefix 'rfts_', database '1');
 
 -- ZSET
 CREATE FOREIGN TABLE rft_zset(
-	key     TEXT,
-	member  TEXT,
-	score   INT,
-	"index" INT,
-	expiry  INT
+    key     TEXT,
+    member  TEXT,
+    score   INT,
+    "index" INT,
+    expiry  INT
 ) SERVER localredis
   OPTIONS (tabletype 'zset', keyprefix 'rftz_', database '1');
 
 -- TTL
 CREATE FOREIGN TABLE rft_ttl(
-	key    TEXT,
-	expiry INT
+    key    TEXT,
+    expiry INT
 ) SERVER localredis
   OPTIONS (tabletype 'ttl', database '1');
 
 -- LEN
 CREATE FOREIGN TABLE rft_len(
-	key       TEXT,
-	tabletype TEXT,
-	len       INT,
-	expiry    INT
+    key       TEXT,
+    tabletype TEXT,
+    len       INT,
+    expiry    INT
 ) SERVER localredis
   OPTIONS (tabletype 'len', database '1');
 
 -- PUBLISH
 CREATE FOREIGN TABLE rft_pub(
-	channel   TEXT,
-	message   TEXT,
-	len       INT
+    channel   TEXT,
+    message   TEXT,
+    len       INT
 ) SERVER localredis
   OPTIONS (tabletype 'publish', database '1');
 
 -- KEYS
 CREATE FOREIGN TABLE rft_keys(
-	key       TEXT
+    key       TEXT
 ) SERVER localredis
   OPTIONS (tabletype 'keys', database '1');
 
@@ -104,18 +106,21 @@ CREATE FOREIGN TABLE rft_keys(
 -- ===================================================================
 
 -- STRING
-INSERT INTO rft_str (key, sval) VALUES ('strkey', 'strval');
-INSERT INTO rft_str (key, sval, expiry) VALUES ('strkey2', 'has-expiry', 30);
+INSERT INTO rft_str (skey, sval) VALUES ('strkey', 'strval');
+INSERT INTO rft_str (skey, sval, expiry) VALUES ('strkey2', 'has-expiry', 30);
 
-SELECT * FROM rft_str WHERE key = 'strkey';
-SELECT * FROM rft_str WHERE key = 'strkey2';
+SELECT * FROM rft_str WHERE skey = 'strkey';
+SELECT * FROM rft_str WHERE skey = 'strkey2';
 
-UPDATE rft_str SET sval = (SELECT 'updated-strval'::TEXT) WHERE key = 'strkey';
-SELECT * FROM rft_str WHERE key = 'strkey';
-SELECT * FROM rft_str WHERE key = 'strkey2';
+UPDATE rft_str SET sval = (SELECT 'updated-strval'::TEXT) WHERE skey = 'strkey';
+SELECT * FROM rft_str WHERE skey = 'strkey';
+SELECT * FROM rft_str WHERE skey = 'strkey2';
 
-UPDATE rft_str SET sval = 'updated-strval2' WHERE key = (SELECT 'strkey'::TEXT);
-SELECT * FROM rft_str WHERE key = 'strkey';
+UPDATE rft_str SET sval = 'updated-strval2' WHERE skey = (SELECT 'strkey'::TEXT);
+SELECT * FROM rft_str WHERE skey = 'strkey';
+
+UPDATE rft_str SET sval = 'updated-strval3' WHERE skey = format('%s', 'strkey'::TEXT);
+SELECT * FROM rft_str WHERE skey = 'strkey';
 
 -- HASH
 INSERT INTO rft_hash (key, field, value) VALUES ('hkey', 'f1', 'v1');
@@ -206,7 +211,7 @@ UPDATE rft_pub SET message = 'something' WHERE channel = 'chan';
 DELETE FROM rft_pub WHERE channel = 'chan';
 
 -- list keys
-SELECT * FROM rft_keys;
+SELECT * FROM rft_keys ORDER BY key;
 
 -- list keys with pattern
 SELECT * FROM rft_keys WHERE key = 'rftz*';
@@ -243,12 +248,61 @@ DELETE FROM rft_zset WHERE key = 'zkey' AND member = 'member3';
 SELECT * FROM rft_zset WHERE key = 'zkey';
 
 -- ===================================================================
+-- functions with where clause
+-- ===================================================================
+
+-- see https://github.com/nahanni/rw_redis_fdw/issues/14
+CREATE OR REPLACE FUNCTION where_clause_func_expr()
+  RETURNS TEXT
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  DECLARE
+    _str TEXT = 'strkey';
+    _val TEXT;
+  BEGIN
+    SELECT sval INTO _val FROM rft_str WHERE skey = lower(_str);
+    RETURN _val;
+  END;
+END;
+$$;
+
+-- same but for T_OpExpr
+CREATE OR REPLACE FUNCTION where_clause_op_expr()
+  RETURNS TEXT
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  DECLARE
+    _str JSON = '{"key":"strkey"}'::JSON;
+    _val TEXT;
+  BEGIN
+    SELECT sval INTO _val FROM rft_str WHERE skey = _str->>'key';
+    RETURN _val;
+  END;
+END;
+$$;
+
+-- on sixth call T_ConstExpr will be replaced with T_FuncExpr on PostgreSQL>=10
+SELECT where_clause_func_expr(), where_clause_func_expr(),
+      where_clause_func_expr(), where_clause_func_expr(),
+      where_clause_func_expr(), where_clause_func_expr();
+
+-- on sixth call T_ConstExpr will be replaced with T_OpExpr on PostgreSQL>=10
+SELECT where_clause_op_expr(), where_clause_op_expr(),
+      where_clause_op_expr(), where_clause_op_expr(),
+      where_clause_op_expr(), where_clause_op_expr();
+
+DROP FUNCTION where_clause_func_expr();
+DROP FUNCTION where_clause_op_expr();
+
+-- ===================================================================
 -- cleanup
 -- ===================================================================
 
 -- delete all keys
-DELETE FROM rft_str WHERE key = 'strkey';
-DELETE FROM rft_str WHERE key = 'strkey2';
+DELETE FROM rft_str WHERE skey = 'strkey';
+DELETE FROM rft_str WHERE skey = format('%s', 'strkey2'::TEXT);
 
 DELETE FROM rft_hash WHERE key = 'hkey';
 DELETE FROM rft_hash WHERE key = 'hkey2';

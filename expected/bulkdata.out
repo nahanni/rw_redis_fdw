@@ -1,0 +1,44 @@
+CREATE FOREIGN TABLE rft_str(
+    key    TEXT,
+    value  TEXT,
+    expiry INT
+) SERVER localredis
+  OPTIONS (tabletype 'string');
+CREATE TEMP TABLE bt(
+    k TEXT,
+    v TEXT
+);
+COPY bt (k, v) FROM STDIN;
+INSERT INTO rft_str(key, value)
+SELECT * FROM bt
+RETURNING *;
+ key  |  value  | expiry 
+------+---------+--------
+ key1 | value-1 |      0
+ key2 | value-2 |      0
+ key3 | value-3 |      0
+ key4 | value-4 |      0
+ key5 | value-5 |      0
+ key6 | value-6 |      0
+ key7 | value-7 |      0
+ key8 | value-8 |      0
+ key9 | value-9 |      0
+(9 rows)
+
+SELECT * FROM rft_str WHERE key = 'key3';
+ key  |  value  | expiry 
+------+---------+--------
+ key3 | value-3 |     -1
+(1 row)
+
+DELETE FROM rft_str WHERE key = 'key1';
+DELETE FROM rft_str WHERE key = 'key2';
+DELETE FROM rft_str WHERE key = 'key3';
+DELETE FROM rft_str WHERE key = 'key4';
+DELETE FROM rft_str WHERE key = 'key5';
+DELETE FROM rft_str WHERE key = 'key6';
+DELETE FROM rft_str WHERE key = 'key7';
+DELETE FROM rft_str WHERE key = 'key8';
+DELETE FROM rft_str WHERE key = 'key9';
+DROP TABLE bt;
+DROP FOREIGN TABLE rft_str;

@@ -1,0 +1,47 @@
+2020-12-03 Version 1.0.2
+
+- Allow updates for valttl field.
+- Fix crash in some rare cases.
+- Fix print format for int64_t
+
+2021-02-11 Version 1.0.3
+
+- Fix redisCommand() format string, it does not support %jd, so we are using %ld
+
+2022-08-29 Version 1.0.4
+
+- Removed %jd from all format strings, using %lld everywhere for 64 bit integers
+
+2022-12-07 Version 1.0.5
+
+- PostgreSQL 14 support
+
+2023-08-26 Version 1.0.6
+
+- PostrgeSQL 15 support
+
+2024-01-15 Version 1.0.7
+
+- Fix error with UPDATE/DELETE operations with function calls
+
+2024-06-10 Version 1.0.8
+
+- Fix Makefile to override PG_CONFIG variables
+
+2024-07-22 Version 1.0.9
+
+- Fix key is NULL error
+- Add new test cases
+- Fix 1.0.8 update script
+
+2024-10-07 Version 1.0.10
+
+- Fix errors running on server built with --enable-cassert
+- Fix memory issues on error handling
+
+2025-04-14 Version 1.0.11
+
+- PostgreSQL 16 and 17 support
+- Stop manually copying same files, just generate them at build
+- Make it possible to run make installcheck for this extension
+- Remove outdated spec file
